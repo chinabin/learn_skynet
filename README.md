@@ -1,1 +1,2 @@
 # learn_skynet
+这个仓库用户记录skynet的学习，目标是按照其思想，写一个运行在windows平台下的win_skynet.
