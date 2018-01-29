@@ -22,8 +22,8 @@ struct skynet_context {
 	int ref;
 	char handle_name[10];
 	char result[32];
-	void * cb_ud;
-	skynet_cb cb;
+	void * cb_ud;			//回调函数的第二个参数
+	skynet_cb cb;			//回调函数指针，定义在skynet.h
 	struct message_queue *queue;
 };
 
@@ -61,7 +61,7 @@ skynet_context_new(const char * name, char *parm) {
 
 	ctx->handle = skynet_handle_register(ctx);
 	ctx->queue = skynet_mq_create(DEFAULT_MESSAGE_QUEUE);
-	ctx->calling = 1;	//QUESTION: calling的用处是什么
+	ctx->calling = 1;	//QUESTION: calling应该是标识ctx当前是否在被使用（1为使用，0为没使用）
 	// init function maybe use ctx->handle, so it must init at last
 
 	int r = skynet_module_instance_init(mod, inst, ctx, parm);
@@ -100,6 +100,7 @@ skynet_context_release(struct skynet_context *ctx) {
 	return ctx;
 }
 
+//将消息丢弃到黑洞
 static void
 _drop_message(int source, const char * addr , void * data, size_t sz) {
 	struct blackhole * b = malloc(sizeof(*b));
@@ -108,6 +109,7 @@ _drop_message(int source, const char * addr , void * data, size_t sz) {
 	b->data = data;
 	b->sz = sz;
 
+	//QUESTION: 什么是黑洞？
 	int des = skynet_handle_findname(BLACKHOLE);
 	if (des<0)
 		return;
@@ -120,8 +122,10 @@ _drop_message(int source, const char * addr , void * data, size_t sz) {
 	skynet_mq_push(&msg);
 }
 
+//调用ctx的回调函数
 static void
 _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
+	//source等于-1表示定时器时间到了
 	if (msg->source == -1) {
 		ctx->cb(ctx, ctx->cb_ud, NULL, msg->data, msg->sz);
 	} else {
@@ -134,6 +138,8 @@ _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
 	}
 }
 
+//从队列Q中取出一个消息，如果目的handle的ctx正在使用，则将该消息添加到ctx的消息队列
+//否则则将ctx剩余的消息全部处理完
 int
 skynet_context_message_dispatch(void) {
 	struct skynet_message msg;
@@ -175,7 +181,9 @@ skynet_context_message_dispatch(void) {
 const char * 
 skynet_command(struct skynet_context * context, const char * cmd , const char * parm) {
 	if (strcmp(cmd,"TIMEOUT") == 0) {
+		//time:session
 		char * session_ptr = NULL;
+		//strtol会将parm按照10指定的基数转换然后返回。遇到的第一个非法值会将地址赋值给第二个参数
 		int ti = strtol(parm, &session_ptr, 10);
 		char sep = session_ptr[0];
 		assert(sep == ':');
@@ -226,6 +234,7 @@ skynet_command(struct skynet_context * context, const char * cmd , const char * 
 void 
 skynet_send(struct skynet_context * context, const char * addr , void * msg, size_t sz) {
 	int des = -1;
+	//':'后面跟的是handle，'.'后面跟的是handle name
 	if (addr[0] == ':') {
 		des = strtol(addr+1, NULL, 16);
 	} else if (addr[0] == '.') {
