@@ -5,7 +5,7 @@
 
 struct skynet_message {
 	int source;
-	int destination;
+	int destination;	//目标的handle
 	void * data;
 	size_t sz;
 };
@@ -21,7 +21,7 @@ void skynet_mq_push(struct skynet_message *message);
 struct message_queue * skynet_mq_create(int cap);
 //释放消息队列
 void skynet_mq_release(struct message_queue *q);
-//从指定消息队列头中取出一个消息，返回此消息的目的地
+//从指定消息队列头中取出一个消息，成功则返回此消息的目的地（大于等于0）
 int skynet_mq_leave(struct message_queue *q, struct skynet_message *message);
 //将指定新消息添加到队列尾
 void skynet_mq_enter(struct message_queue *q, struct skynet_message *message);

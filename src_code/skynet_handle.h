@@ -12,7 +12,7 @@ void skynet_handle_retire(int handle);
 //从handle_storage中获取此handle对应的ctx，并将引用计数加1
 struct skynet_context * skynet_handle_grab(int handle);
 
-//通过名字获取对应的handle
+//通过名字获取对应的handle，成功则返回值大于等于0
 int skynet_handle_findname(const char * name);
 //将新的handle name插入handle_storage，返回handle name
 const char * skynet_handle_namehandle(int handle, const char *name);
