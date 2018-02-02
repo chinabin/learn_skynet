@@ -5,25 +5,33 @@
 #include <string.h>
 #include <stdio.h>
 
+//强制使得s变成4的倍数
 #define ALIGN(s) (((s) + 3 ) & ~3)
 
 struct ringbuffer {
-	int size;
-	int head;
+	int size;		//整个ring buffer的长度，不包括结构体ringbuffer的长度
+	int head;		//下一个可用的位置
 };
 
+//获取blk在rb中的偏移
 static inline int
 block_offset(struct ringbuffer * rb, struct ringbuffer_block * blk) {
 	char * start = (char *)(rb + 1);
 	return (char *)blk - start;
 }
 
+// 获取在rb中偏移为offset的位置上的blk
 static inline struct ringbuffer_block *
 block_ptr(struct ringbuffer * rb, int offset) {
 	char * start = (char *)(rb + 1);
 	return (struct ringbuffer_block *)(start + offset);
 }
 
+//获取rb中blk后面的一个blk
+/*
+从这个函数可以看出，ringbuffer_block与ringbuffer_block之间是“紧挨”的，
+中间可能因为字节对齐而残留一些缝隙。
+*/
 static inline struct ringbuffer_block *
 block_next(struct ringbuffer * rb, struct ringbuffer_block * blk) {
 	int align_length = ALIGN(blk->length);
@@ -35,6 +43,7 @@ block_next(struct ringbuffer * rb, struct ringbuffer_block * blk) {
 	return block_ptr(rb, head + align_length);
 }
 
+//设定一个指定大小的ringbuffer，以及第一个ringbuffer_block
 struct ringbuffer *
 ringbuffer_new(int size) {
 	struct ringbuffer * rb = malloc(sizeof(*rb) + size);
@@ -46,11 +55,13 @@ ringbuffer_new(int size) {
 	return rb;
 }
 
+//释放ring_buffer
 void
 ringbuffer_delete(struct ringbuffer * rb) {
 	free(rb);
 }
 
+//将一个blk链接到同一id的blk中
 void
 ringbuffer_link(struct ringbuffer *rb , struct ringbuffer_block * head, struct ringbuffer_block * next) {
 	while (head->next >=0) {
@@ -149,6 +160,7 @@ ringbuffer_resize(struct ringbuffer * rb, struct ringbuffer_block * blk, int siz
 	rb->head = block_offset(rb, blk);
 }
 
+//获取指定的blk的id
 static int
 _block_id(struct ringbuffer_block * blk) {
 	assert(blk->length >= sizeof(struct ringbuffer_block));
@@ -157,6 +169,7 @@ _block_id(struct ringbuffer_block * blk) {
 	return id;
 }
 
+//将与指定blk的id号相同的blk都标记为废弃
 void
 ringbuffer_free(struct ringbuffer * rb, struct ringbuffer_block * blk) {
 	if (blk == NULL)
@@ -253,6 +266,7 @@ ringbuffer_yield(struct ringbuffer * rb, struct ringbuffer_block *blk, int skip)
 	}
 }
 
+//显示当前rb中前十个blk信息
 void 
 ringbuffer_dump(struct ringbuffer * rb) {
 	struct ringbuffer_block *blk = block_ptr(rb,0);
