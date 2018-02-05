@@ -29,18 +29,18 @@
 #define SOCKET_ALIVE	SOCKET_SUSPEND
 
 struct socket {
-	int fd;
+	int fd;		//标识
 	struct ringbuffer_block * node;
 	struct ringbuffer_block * temp;
 	int status;
 };
 
 struct mread_pool {
-	int listen_fd;
-	int epoll_fd;
-	int max_connection;
-	int closed;
-	int active;
+	int listen_fd;		//监听句柄
+	int epoll_fd;		//epoll句柄
+	int max_connection;	//最大连接数
+	int closed;			//句柄关闭的数目，默认为0
+	int active;			//当前激活的连接的索引，默认为-1
 	int skip;
 	struct socket * sockets;
 	struct socket * free_socket;
@@ -51,6 +51,7 @@ struct mread_pool {
 	struct ringbuffer * rb;
 };
 
+//创建max个socket结构并设置fd，返回socket结构数组
 static struct socket *
 _create_sockets(int max) {
 	int i;
@@ -61,10 +62,11 @@ _create_sockets(int max) {
 		s[i].temp = NULL;
 		s[i].status = SOCKET_INVALID;
 	}
-	s[max-1].fd = -1;
+	s[max-1].fd = -1;		//QUESTION: 为什么最后一个fd要设置为-1？
 	return s;
 }
 
+//创建rb并返回rb
 static struct ringbuffer *
 _create_rb(int size) {
 	size = (size + 3) & ~3;
@@ -76,11 +78,13 @@ _create_rb(int size) {
 	return rb;
 }
 
+//删除rb
 static void
 _release_rb(struct ringbuffer * rb) {
 	ringbuffer_delete(rb);
 }
 
+//设置流为非阻塞型
 static int
 _set_nonblocking(int fd)
 {
@@ -127,7 +131,7 @@ mread_create(int port , int max , int buffer_size) {
 		return NULL;
 	}
 
-	//告诉内核这个监听的数目，要多一个是因为epoll句柄创建好之后，自身会占据一个fd值。所以最后切记close(epoll_fd);
+	//epoll_create告诉内核这个监听的数目，要多一个是因为epoll句柄创建好之后，自身会占据一个fd值。所以最后切记close(epoll_fd);
 	int epoll_fd = epoll_create(max + 1);
 	if (epoll_fd == -1) {
 		close(listen_fd);
@@ -173,7 +177,7 @@ mread_close(struct mread_pool *self) {
 	struct socket * s = self->sockets;
 	for (i=0;i<self->max_connection;i++) {
 		if (s[i].status >= SOCKET_ALIVE) {
-			close(s[i].fd);
+			close(s[i].fd);	//释放连接
 		}
 	}
 	free(s);
@@ -186,6 +190,7 @@ mread_close(struct mread_pool *self) {
 	free(self);
 }
 
+//获取epoll事件数目
 static int
 _read_queue(struct mread_pool * self, int timeout) {
 	self->queue_head = 0;
@@ -199,6 +204,12 @@ _read_queue(struct mread_pool * self, int timeout) {
 	return n;
 }
 
+/*
+参考例子：https://www.cnblogs.com/fnlingnzb-learner/p/5835573.html
+epoll_wait返回epoll事件数目，假设返回n，events前n个元素就是发生事件的元素
+所以这里的调用合理
+*/
+//获取一个epoll事件句柄
 inline static int
 _read_one(struct mread_pool * self) {
 	if (self->queue_head >= self->queue_len) {
@@ -207,6 +218,7 @@ _read_one(struct mread_pool * self) {
 	return self->ev[self->queue_head ++].data.fd;
 }
 
+//获取一个空闲socket
 static struct socket *
 _alloc_socket(struct mread_pool * self) {
 	if (self->free_socket == NULL) {
@@ -222,6 +234,7 @@ _alloc_socket(struct mread_pool * self) {
 	return s;
 }
 
+//添加新的连接，fd为accept返回值
 static void
 _add_client(struct mread_pool * self, int fd) {
 	struct socket * s = _alloc_socket(self);
@@ -244,6 +257,7 @@ _add_client(struct mread_pool * self, int fd) {
 	map_insert(self->socket_hash , fd , id);
 }
 
+//报告关闭
 static int
 _report_closed(struct mread_pool * self) {
 	int i;
@@ -257,6 +271,7 @@ _report_closed(struct mread_pool * self) {
 	return -1;
 }
 
+//查询现在的状态，看到底发生了什么事，并做出相应的操作
 int
 mread_poll(struct mread_pool * self , int timeout) {
 	self->skip = 0;
@@ -281,7 +296,7 @@ mread_poll(struct mread_pool * self , int timeout) {
 			self->active = -1;
 			return -1;
 		}
-		if (fd == self->listen_fd) {
+		if (fd == self->listen_fd) { 	//表示有新的连接
 			struct sockaddr_in remote_addr;
 			socklen_t len = sizeof(struct sockaddr_in);
 			int client_fd = accept(self->listen_fd , (struct sockaddr *)&remote_addr ,  &len);
@@ -289,7 +304,7 @@ mread_poll(struct mread_pool * self , int timeout) {
 //				printf("MREAD connect %s:%u (fd=%d)\n",inet_ntoa(remote_addr.sin_addr),ntohs(remote_addr.sin_port), client_fd);
 				_add_client(self, client_fd);
 			}
-		} else {
+		} else { 	//表示fd上有事件发生
 			int index = map_search(self->socket_hash , fd);
 			if (index >= 0) {
 				self->active = index;
@@ -301,6 +316,7 @@ mread_poll(struct mread_pool * self , int timeout) {
 	}
 }
 
+//返回index索引的socket句柄
 int
 mread_socket(struct mread_pool * self, int index) {
 	return self->sockets[index].fd;
@@ -316,6 +332,7 @@ _link_node(struct ringbuffer * rb, int id, struct socket * s , struct ringbuffer
 	}
 }
 
+//关闭客户端
 void
 mread_close_client(struct mread_pool * self, int id) {
 	struct socket * s = &self->sockets[id];
