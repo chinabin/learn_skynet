@@ -3,6 +3,7 @@
 
 struct mread_pool;
  
+ //创建和删除mread
 struct mread_pool * mread_create(int port , int max , int buffer);
 void mread_close(struct mread_pool *m);
 

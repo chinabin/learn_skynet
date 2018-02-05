@@ -84,16 +84,19 @@ _release_rb(struct ringbuffer * rb) {
 static int
 _set_nonblocking(int fd)
 {
+	//F_GETFL 取得文件描述符状态旗标，此旗标为open()的参数flags。
     int flag = fcntl(fd, F_GETFL, 0);
     if ( -1 == flag ) {
         return -1;
     }
 
+	//把一个套接字设置为非阻塞型
     return fcntl(fd, F_SETFL, flag | O_NONBLOCK);
 }
 
 struct mread_pool *
 mread_create(int port , int max , int buffer_size) {
+	//创建一个监听套接字，并且设置为非阻塞
 	int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (listen_fd == -1) {
 		return NULL;
@@ -103,6 +106,10 @@ mread_create(int port , int max , int buffer_size) {
 	}
 
 	int reuse = 1;
+	/*
+	SOL_SOCKET表示设置的层级，此参数决定后面参数的含义
+	SO_REUSEADDR，打开或关闭地址复用功能
+	*/
 	setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(int));
 
 	struct sockaddr_in my_addr;
@@ -120,14 +127,17 @@ mread_create(int port , int max , int buffer_size) {
 		return NULL;
 	}
 
+	//告诉内核这个监听的数目，要多一个是因为epoll句柄创建好之后，自身会占据一个fd值。所以最后切记close(epoll_fd);
 	int epoll_fd = epoll_create(max + 1);
 	if (epoll_fd == -1) {
 		close(listen_fd);
 		return NULL;
 	}
 	struct epoll_event ev;
-	ev.events = EPOLLIN;
+	ev.events = EPOLLIN;	// EPOLLIN: 触发该事件，表示对应的文件描述符上有可读数据。(包括对端SOCKET正常关闭)；
 	ev.data.fd = listen_fd;
+	//epoll_ctl是epoll的事件注册函数
+	//EPOLL_CTL_ADD：       注册新的fd
 	if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &ev) == -1) {
 		close(listen_fd);
 		close(epoll_fd);
@@ -179,6 +189,7 @@ mread_close(struct mread_pool *self) {
 static int
 _read_queue(struct mread_pool * self, int timeout) {
 	self->queue_head = 0;
+	//epoll_wait该函数用于轮询I/O事件的发生
 	int n = epoll_wait(self->epoll_fd , self->ev, READQUEUE, timeout);
 	if (n == -1) {
 		self->queue_len = 0;
