@@ -4,6 +4,7 @@
 struct mread_pool;
 
 //云风设计思路：https://blog.codingnow.com/2012/04/mread.html
+//仓库地址：https://github.com/cloudwu/mread
 
  //创建和删除mread
 struct mread_pool * mread_create(int port , int max , int buffer);

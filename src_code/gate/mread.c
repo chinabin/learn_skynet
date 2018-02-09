@@ -42,11 +42,11 @@ struct mread_pool {
 	int closed;			//句柄关闭的数目，默认为0
 	int active;			//当前激活的连接的索引，默认为-1
 	int skip;
-	struct socket * sockets;
-	struct socket * free_socket;
+	struct socket * sockets;	//指向所有socket结构
+	struct socket * free_socket;	//指向当前可用的空闲socket结构
 	struct map * socket_hash;
-	int queue_len;
-	int queue_head;
+	int queue_len;		//事件数目
+	int queue_head;		//事件索引，取值为[0, queue_len - 1]
 	struct epoll_event ev[READQUEUE];
 	struct ringbuffer * rb;
 };
@@ -62,7 +62,7 @@ _create_sockets(int max) {
 		s[i].temp = NULL;
 		s[i].status = SOCKET_INVALID;
 	}
-	s[max-1].fd = -1;		//QUESTION: 为什么最后一个fd要设置为-1？
+	s[max-1].fd = -1;		//_alloc_socket设置下一个空闲socket指针的时候会判断是否到达尾端了
 	return s;
 }
 
@@ -194,6 +194,9 @@ mread_close(struct mread_pool *self) {
 static int
 _read_queue(struct mread_pool * self, int timeout) {
 	self->queue_head = 0;
+	/*
+	 Epoll 最大的优点就在于它只管你“活跃”的连接。
+	*/
 	//epoll_wait该函数用于轮询I/O事件的发生
 	int n = epoll_wait(self->epoll_fd , self->ev, READQUEUE, timeout);
 	if (n == -1) {
@@ -218,7 +221,7 @@ _read_one(struct mread_pool * self) {
 	return self->ev[self->queue_head ++].data.fd;
 }
 
-//获取一个空闲socket
+//返回一个空闲socket指针并设置下一个self的空闲socket指针
 static struct socket *
 _alloc_socket(struct mread_pool * self) {
 	if (self->free_socket == NULL) {
