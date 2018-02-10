@@ -49,11 +49,11 @@ struct mread_pool {
 	int closed;			//连接已断开但是其对应资源还未清理完全(腾出socket)的数目
 	int active;			//当前激活的连接的索引，默认为-1
 	int skip;			//一次或者连续多次pull到的数据大小
-	struct socket * sockets;
-	struct socket * free_socket;
+	struct socket * sockets;	//指向所有socket结构
+	struct socket * free_socket;	//指向当前可用的空闲socket结构
 	struct map * socket_hash;
-	int queue_len;
-	int queue_head;
+	int queue_len;		//事件数目
+	int queue_head;		//事件索引，取值为[0, queue_len - 1]
 	struct epoll_event ev[READQUEUE];
 	struct ringbuffer * rb;
 };
@@ -200,6 +200,9 @@ mread_close(struct mread_pool *self) {
 static int
 _read_queue(struct mread_pool * self, int timeout) {
 	self->queue_head = 0;
+	/*
+	 Epoll 最大的优点就在于它只管你“活跃”的连接。
+	*/
 	//epoll_wait该函数用于轮询I/O事件的发生
 	int n = epoll_wait(self->epoll_fd , self->ev, READQUEUE, timeout);
 	if (n == -1) {
