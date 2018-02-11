@@ -22,14 +22,21 @@
 
 #define SOCKET_INVALID 0
 #define SOCKET_CLOSED 1
+//suspend状态表示，等待接收数据
 #define SOCKET_SUSPEND 2
+//read状态表示，数据存在于缓存中，可以直接获取(调用buffer_read)
 #define SOCKET_READ 3
+//pollin状态表示有数据可以接收(调用socket recv)
 #define SOCKET_POLLIN 4
 
 #define SOCKET_ALIVE	SOCKET_SUSPEND
 
 struct socket {
 	int fd;		//标识
+	/*
+	node 存放了一个链表,是不同时期收到的数据流.
+	如果外部请求的数据块不连续, 就重新申请一块连续空间 temp ,复制过去返回.
+	*/
 	struct ringbuffer_block * node;
 	struct ringbuffer_block * temp;
 	int status;
@@ -39,9 +46,9 @@ struct mread_pool {
 	int listen_fd;		//监听句柄
 	int epoll_fd;		//epoll句柄
 	int max_connection;	//最大连接数
-	int closed;			//句柄关闭的数目，默认为0
+	int closed;			//连接已断开但是其对应资源还未清理完全(腾出socket)的数目
 	int active;			//当前激活的连接的索引，默认为-1
-	int skip;
+	int skip;			//一次或者连续多次pull到的数据大小
 	struct socket * sockets;	//指向所有socket结构
 	struct socket * free_socket;	//指向当前可用的空闲socket结构
 	struct map * socket_hash;
@@ -62,7 +69,7 @@ _create_sockets(int max) {
 		s[i].temp = NULL;
 		s[i].status = SOCKET_INVALID;
 	}
-	s[max-1].fd = -1;		//_alloc_socket设置下一个空闲socket指针的时候会判断是否到达尾端了
+	s[max-1].fd = -1;
 	return s;
 }
 
@@ -190,7 +197,6 @@ mread_close(struct mread_pool *self) {
 	free(self);
 }
 
-//获取epoll事件数目
 static int
 _read_queue(struct mread_pool * self, int timeout) {
 	self->queue_head = 0;
@@ -212,7 +218,6 @@ _read_queue(struct mread_pool * self, int timeout) {
 epoll_wait返回epoll事件数目，假设返回n，events前n个元素就是发生事件的元素
 所以这里的调用合理
 */
-//获取一个epoll事件句柄
 inline static int
 _read_one(struct mread_pool * self) {
 	if (self->queue_head >= self->queue_len) {
@@ -221,7 +226,6 @@ _read_one(struct mread_pool * self) {
 	return self->ev[self->queue_head ++].data.fd;
 }
 
-//返回一个空闲socket指针并设置下一个self的空闲socket指针
 static struct socket *
 _alloc_socket(struct mread_pool * self) {
 	if (self->free_socket == NULL) {
@@ -229,7 +233,7 @@ _alloc_socket(struct mread_pool * self) {
 	}
 	struct socket * s = self->free_socket;
 	int next_free = s->fd;
-	if (next_free < 0 ) {
+	if (next_free < 0 ) {	//到达socket数组的最后一个
 		self->free_socket = NULL;
 	} else {
 		self->free_socket = &self->sockets[next_free];
@@ -237,7 +241,6 @@ _alloc_socket(struct mread_pool * self) {
 	return s;
 }
 
-//添加新的连接，fd为accept返回值
 static void
 _add_client(struct mread_pool * self, int fd) {
 	struct socket * s = _alloc_socket(self);
@@ -260,7 +263,6 @@ _add_client(struct mread_pool * self, int fd) {
 	map_insert(self->socket_hash , fd , id);
 }
 
-//报告关闭
 static int
 _report_closed(struct mread_pool * self) {
 	int i;
@@ -274,7 +276,7 @@ _report_closed(struct mread_pool * self) {
 	return -1;
 }
 
-//查询现在的状态，看到底发生了什么事，并做出相应的操作
+//有数据可读取，或者有清理操作要完成
 int
 mread_poll(struct mread_pool * self , int timeout) {
 	self->skip = 0;
@@ -285,7 +287,7 @@ mread_poll(struct mread_pool * self , int timeout) {
 		}
 	}
 	if (self->closed > 0 ) {
-		return _report_closed(self);
+		return _report_closed(self);	//有断开的连接对应的资源清理
 	}
 	if (self->queue_head >= self->queue_len) {
 		if (_read_queue(self, timeout) == -1) {
@@ -335,11 +337,13 @@ _link_node(struct ringbuffer * rb, int id, struct socket * s , struct ringbuffer
 	}
 }
 
-//关闭客户端
+//关闭客户端连接
 void
 mread_close_client(struct mread_pool * self, int id) {
 	struct socket * s = &self->sockets[id];
 	s->status = SOCKET_CLOSED;
+	//如果不是在_close_active中调用此函数的时候
+	//collect函数已经将对应的blk标记为废弃了
 	s->node = NULL;
 	s->temp = NULL;
 	close(s->fd);
@@ -349,6 +353,7 @@ mread_close_client(struct mread_pool * self, int id) {
 	++self->closed;
 }
 
+//关闭当前激活的连接，并使对应的blk废弃
 static void
 _close_active(struct mread_pool * self) {
 	int id = self->active;
@@ -358,6 +363,7 @@ _close_active(struct mread_pool * self) {
 	mread_close_client(self, id);
 }
 
+//从self->node中读取size大小数据
 static char *
 _ringbuffer_read(struct mread_pool * self, int *size) {
 	struct socket * s = &self->sockets[self->active];
@@ -371,22 +377,28 @@ _ringbuffer_read(struct mread_pool * self, int *size) {
 	return ret;
 }
 
+//获取数据
 void * 
 mread_pull(struct mread_pool * self , int size) {
-	if (self->active == -1) {
+	if (self->active == -1) {	//表示无数据可以获取
 		return NULL;
 	}
 	struct socket *s = &self->sockets[self->active];
 	int rd_size = size;
 	char * buffer = _ringbuffer_read(self, &rd_size);
 	if (buffer) {
+		//这里应该可以assert(s->status == SOCKET_READ)
 		self->skip += size;
 		return buffer;
 	}
+	/*
+	else
+	表示self->node中的数据不够
+	*/
 	switch (s->status) {
 	case SOCKET_READ:
 		s->status = SOCKET_SUSPEND;
-	case SOCKET_CLOSED:
+	case SOCKET_CLOSED:		//客户端已经断开连接，无需再接收数据，所以返回NULL，之后调用yield函数会腾出socket
 	case SOCKET_SUSPEND:
 		return NULL;
 	default:
@@ -484,7 +496,7 @@ mread_yield(struct mread_pool * self) {
 	struct socket *s = &self->sockets[self->active];
 	ringbuffer_free(self->rb , s->temp);
 	s->temp = NULL;
-	if (s->status == SOCKET_CLOSED && s->node == NULL) {
+	if (s->status == SOCKET_CLOSED && s->node == NULL) {	//客户端已经断开连接，腾出socket
 		--self->closed;
 		s->status = SOCKET_INVALID;
 		map_erase(self->socket_hash , s->fd);
@@ -509,7 +521,7 @@ mread_closed(struct mread_pool * self) {
 		return 0;
 	}
 	struct socket * s = &self->sockets[self->active];
-	if (s->status == SOCKET_CLOSED && s->node == NULL) {
+	if (s->status == SOCKET_CLOSED && s->node == NULL) {	//如果客户端已经断开连接则回收资源
 		mread_yield(self);
 		return 1;
 	}
