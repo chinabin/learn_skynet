@@ -1,3 +1,9 @@
+准备skynet源代码：
+1. 找到第一个commit id，git log --reverse --pretty=oneline
+2. 导出版本，git archive -o ~/Desktop/name.zip 8ef978
+3. 解压，unzip name.zip -d dir_name
+
+编译lua：
 1. 从 http://www.lua.org/ftp/ 下载源代码 lua-5.3.4.tar.gz
 2. 解压tar zxf lua-5.3.4.tar.gz
 3. cd lua-5.3.4
@@ -5,7 +11,14 @@
 5. 将
 	CFLAGS= -O2 -Wall -DLUA_COMPAT_ALL $(SYSCFLAGS) $(MYCFLAGS)
    改为
-	CFLAGS= -O2 -Wall -DLUA_COMPAT_ALL -fPIC $(SYSCFLAGS) $(MYCFLAGS)
+	CFLAGS= -O2 -Wall -DLUA_COMPAT_ALL $(SYSCFLAGS) -fPIC $(MYCFLAGS)
 6. make linux test
 7. make linux
 8. sudo make install
+
+编译skynet：
+1. make
+
+运行：
+1. ./skynet
+2. ./client 192.168.31.135 2525
