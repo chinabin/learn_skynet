@@ -1,0 +1,11 @@
+1. 从 http://www.lua.org/ftp/ 下载源代码 lua-5.3.4.tar.gz
+2. 解压tar zxf lua-5.3.4.tar.gz
+3. cd lua-5.3.4
+4. vim src/Makefile
+5. 将
+	CFLAGS= -O2 -Wall -DLUA_COMPAT_ALL $(SYSCFLAGS) $(MYCFLAGS)
+   改为
+	CFLAGS= -O2 -Wall -DLUA_COMPAT_ALL -fPIC $(SYSCFLAGS) $(MYCFLAGS)
+6. make linux test
+7. make linux
+8. sudo make install
