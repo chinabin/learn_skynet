@@ -9,6 +9,7 @@
 static void
 _cb(struct skynet_context * context, void * ud, const char * addr, const void * msg, size_t sz_session) {
 	lua_State *L = ud;
+	//从注册表中获取 _cb 为 key 的值，放入栈中
 	lua_rawgetp(L, LUA_REGISTRYINDEX, _cb);
 	int r;
 	if (msg == NULL) {

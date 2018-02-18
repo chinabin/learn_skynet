@@ -4,8 +4,8 @@
 #include <stdlib.h>
 
 struct skynet_message {
-	int source;
-	int destination;	//目标的handle
+	int source;			//源的 handle
+	int destination;	//目标的 handle
 	void * data;
 	size_t sz;
 };
@@ -17,7 +17,6 @@ int skynet_mq_pop(struct skynet_message *message);
 //skynet_mq_enter的语法糖，将新消息插入Q中
 void skynet_mq_push(struct skynet_message *message);
 
-//传入大小创建消息队列
 struct message_queue * skynet_mq_create(int cap);
 //释放消息队列
 void skynet_mq_release(struct message_queue *q);

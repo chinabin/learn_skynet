@@ -12,4 +12,4 @@ skynet.callback(function()
 	skynet.command("TIMEOUT","0:0")
 end)
 
-skynet.command("TIMEOUT","0:0")
+skynet.command("TIMEOUT","0:0")	--定时器消息，循环读取输入的关键
