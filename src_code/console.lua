@@ -1,5 +1,6 @@
 local skynet = require "skynet"
 
+--这里的function虽然没有声明参数，但是真实调用的时候其实是有传入参数的，只是暂时不需要
 skynet.callback(function()
 	local cmd = io.read()
 	local handle = skynet.command("LAUNCH",cmd)
