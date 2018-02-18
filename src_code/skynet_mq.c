@@ -6,15 +6,14 @@
 
 struct message_queue {
 	int cap;		//消息队列能容纳的消息数
-	int head;		//指向当前可以取出的消息位置
-	int tail;		//指向当前可以插入的队列中的位置
+	int head;		//指向当前可以取出消息的位置，由取出操作对应的函数来管理
+	int tail;		//指向当前可以插入的队列中的位置，由插入操作对应的函数来管理
 	int lock;
 	struct skynet_message *queue;
 };
 
 static struct message_queue *Q = NULL;
 
-//传入大小创建消息队列
 struct message_queue * 
 skynet_mq_create(int cap) {
 	struct message_queue *q = malloc(sizeof(*q));
@@ -75,9 +74,11 @@ skynet_mq_enter(struct message_queue *q, struct skynet_message *message) {
 		q->tail = 0;
 	}
 
+	//消息队列满了，需要扩展
 	if (q->head == q->tail) {
 		struct skynet_message *new_queue = malloc(sizeof(struct skynet_message) * q->cap * 2);
 		int i;
+		//确保消息顺序没乱
 		for (i=0;i<q->cap;i++) {
 			new_queue[i] = q->queue[(q->head + i) % q->cap];
 		}
