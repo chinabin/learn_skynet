@@ -1,0 +1,37 @@
+一. Lua调用C模块代码
+
+
+
+一. Lua调用C模块代码
+    1. 定义将要被Lua使用的函数的原型。
+		所有注册给Lua的C函数具有 "typedef int (*lua_CFunction) (lua_State *L);" 的原型。
+		传入这个函数的参数都需要通过 L 来操作栈获得。
+	2. 将上一步中的函数名按照规则存储，然后为下一步注册做准备。
+		用到的结构体是 luaL_Reg，重点是最后的两个哨兵元素，告诉Lua没有函数需要注册了。
+		luaL_Reg l[] = {
+			{ "test" , _test },
+			{ NULL, NULL },
+		};
+	3. 注册。
+		声明一个特殊函数，这个特殊函数需要以 luaopen_ 作为前缀，其后面的名字就是之后Lua中require的参数。
+		特殊函数里面必须将上一步的函数注册好。
+		int luaopen_mylib(lua_State* L)
+		{
+			/* void luaL_newlib (lua_State *L, const luaL_Reg l[]);
+			 * 创建一个新的"table"，并将"l"中所列出的函数注册为"table"的域。
+			 */ 
+			luaL_newlib(L, l);
+			/*
+			 * 上面的函数等价于
+			 * luaL_newlibtable(L,l)
+			 * luaL_setfuncs(L,l,0)
+			*/
+
+			return 1;
+		}
+	4. 编译成so库供使用。
+	
+	
+	
+Lua函数解释：
+http://cloudwu.github.io/lua53doc/manual.html
