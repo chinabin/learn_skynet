@@ -125,7 +125,7 @@ _drop_message(int source, const char * addr , void * data, size_t sz) {
 //调用ctx的回调函数
 static void
 _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
-	//source等于-1表示定时器时间到了
+	// source 等于 -1 表示源于系统，见 skynet_timeout
 	if (msg->source == -1) {
 		ctx->cb(ctx, ctx->cb_ud, NULL, msg->data, msg->sz);
 	} else {

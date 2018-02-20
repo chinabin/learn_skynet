@@ -17,24 +17,29 @@ struct handle_name {
 	int handle;			//句柄
 };
 
-//用来管理skynet_conetxt，ctx只有被handle_storage管制的时候才有handle的概念
-//例如skynet_context_grab和skynet_handle_grab两个函数，从名字可以看出都是获取同一样东西，但是偏重点不同，前者重点是ctx本身，后者重点是handle_storage中的ctx，所以导致两个函数的实现差异
+//服务集合
 struct handle_storage {
 	struct rwlock lock;
 
+	/*
+	一个不停增长的索引，确保永不重复，用来计算 handle 值
+	*/
 	int handle_index;
-	int slot_size;
+	int slot_size;		//能容纳的 skynet_context 数目
 	struct skynet_context ** slot;
 	
-	//每个服务都可以设置一个名字，名字与服务是通过handle来关联的
-	int name_cap;
-	int name_count;
+	//每个服务都可以设置一个名字(但不是必须)，名字与服务是通过handle来关联的
+	// handle_name 里面的 handle 可以通过公式： (handle & (s->slot_size-1)) 计算出一个下标 n 
+	// slot[n] 就是 handle_name 中 name 对应的 skynet_context
+	int name_cap;		//能容纳的 handle_name 数目，由于 handle_name 和 hadle 不是必须的一一对应，所以开始的时候这个值比较小
+	int name_count;		//已有的 handle_name 个数
 	struct handle_name *name;
 };
 
 static struct handle_storage *H = NULL;
 
-//将ctx插入到handle_storage中，并赋予ctx唯一标识句柄
+//将 ctx 注册成为服务( handle ) ， 存储在 handle_storage 中
+//返回唯一服务( handle )标识
 int 
 skynet_handle_register(struct skynet_context *ctx) {
 	struct handle_storage *s = H;
@@ -57,6 +62,7 @@ skynet_handle_register(struct skynet_context *ctx) {
 				return handle;
 			}
 		}
+		//空间不够，分配空间并迁移数据
 		struct skynet_context ** new_slot = malloc(s->slot_size * 2 * sizeof(struct skynet_context *));
 		memset(new_slot, 0, s->slot_size * 2 * sizeof(struct skynet_context *));
 		for (i=0;i<s->slot_size;i++) {
@@ -70,7 +76,7 @@ skynet_handle_register(struct skynet_context *ctx) {
 	}
 }
 
-//将handle对应的ctx从handle_storage中去除
+//注销服务，并尝试(如果 ctx 的引用计数为0)释放对应 ctx 的资源
 void
 skynet_handle_retire(int handle) {
 	struct handle_storage *s = H;
@@ -122,7 +128,7 @@ skynet_handle_grab(int handle) {
 	return result;
 }
 
-//通过名字获取对应的handle。
+//通过名字获取对应的handle，-1表示没有
 //从这个函数可以发现，handle_storage中名字的存储是按照字母从小到大排序的
 int 
 skynet_handle_findname(const char * name) {
@@ -154,11 +160,10 @@ skynet_handle_findname(const char * name) {
 	return handle;
 }
 
-//此文件的私有函数，为skynet_handle_namehandle服务
-//将一个新的用户定义的handle name插入到handle_storage中
+//在 handle_storage 的 name 中，在索引为 before 的前面插入一个 handle_name
 static void
 _insert_name_before(struct handle_storage *s, char *name, int handle, int before) {
-	if (s->name_count >= s->name_cap) {
+	if (s->name_count >= s->name_cap) {		//空间不够，扩容
 		s->name_cap *= 2;
 		struct handle_name * n = malloc(s->name_cap * sizeof(struct handle_name));
 		int i;
@@ -181,8 +186,7 @@ _insert_name_before(struct handle_storage *s, char *name, int handle, int before
 	s->name_count ++;
 }
 
-//此文件的私有函数，为skynet_handle_namehandle服务
-//为即将插入的新handle name通过字母排序找到合适位置，然后插入
+//在 handle_storage 的 name 中插入一个 handle_name 
 static const char *
 _insert_name(struct handle_storage *s, const char * name, int handle) {
 	int begin = 0;
@@ -207,7 +211,7 @@ _insert_name(struct handle_storage *s, const char * name, int handle) {
 	return result;
 }
 
-//将新的handle name插入handle_storage
+//为 handle 定义名字
 const char * 
 skynet_handle_namehandle(int handle, const char *name) {
 	rwlock_wlock(&H->lock);
