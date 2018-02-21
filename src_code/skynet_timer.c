@@ -183,6 +183,7 @@ skynet_timeout(int handle, int time, int session) {
 	message.destination = handle;
 	message.data = NULL;
 	message.sz = (size_t) session;
+	// time 为0属于特例，不进入 timer 队列，而是直接进入消息队列
 	if (time == 0) {
 		skynet_mq_push(&message);
 	} else {
