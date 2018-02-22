@@ -18,7 +18,7 @@ test(int fd) {
 		head[0] = n & 0xff;
 		head[1] = (n >> 8) & 0xff;
 		int r;
-		r = send(fd, head, 2, 0);
+		r = send(fd, head, 2, 0);		//发送代表数据大小的两字节
 		if (r<0) {
 			perror("send head");
 		}

@@ -15,12 +15,12 @@
 #define DEFAULT_MESSAGE_QUEUE 16
 
 struct skynet_context {
-	void * instance;
-	struct skynet_module * mod;
+	void * instance;				//调用创建实例函数返回值，具体类型取决于创建函数
+	struct skynet_module * mod;		// skynet 中的so库抽象
 	int handle;
 	int calling;
 	int ref;
-	char handle_name[10];
+	char handle_name[10];	//handle 的十六进制字符串形式
 	char result[32];
 	void * cb_ud;			//回调函数的第二个参数
 	skynet_cb cb;			//回调函数指针，定义在skynet.h
@@ -125,7 +125,7 @@ _drop_message(int source, const char * addr , void * data, size_t sz) {
 //调用ctx的回调函数
 static void
 _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
-	//source等于-1表示定时器时间到了
+	// source 等于 -1 表示源于系统，见 skynet_timeout
 	if (msg->source == -1) {
 		ctx->cb(ctx, ctx->cb_ud, NULL, msg->data, msg->sz);
 	} else {

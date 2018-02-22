@@ -17,25 +17,26 @@ typedef void (*timer_execute_func)(void *ud,void *arg);
 
 struct timer_node {
 	struct timer_node *next;
-	int expire;
+	int expire;		//到期秒数
 };
 
 struct link_list {
-	struct timer_node head;
-	struct timer_node *tail;
+	struct timer_node head;			//头部， head->next 指向第一个节点
+	struct timer_node *tail;		//尾部，插入操作发生在尾部
 };
 
 struct timer {
 	struct link_list near[TIME_NEAR];
 	struct link_list t[4][TIME_LEVEL-1];
 	int lock;
-	int time;
+	int time;				// skynet 的滴答数，最开始是基于 current ，之后由 skynet 自己控制增加
 	uint32_t current;		//系统开机到现在的秒数，单位是100毫秒
 };
 
 static struct timer * TI = NULL;
 
-//重置尾指针为头指针，并且将头指针的next指针置空。返回头指针的next指针。
+//清楚链表。使得 tail 指向 head ， head 的 next 指向空
+//与 link 函数紧密结合。确保 head->next 指向的是第一个节点， tail->next 指向空
 static inline struct timer_node *
 link_clear(struct link_list *list)
 {
@@ -46,7 +47,6 @@ link_clear(struct link_list *list)
 	return ret;
 }
 
-//将timer_node节点添加到链表
 static inline void
 link(struct link_list *list,struct timer_node *node)
 {
@@ -55,24 +55,25 @@ link(struct link_list *list,struct timer_node *node)
 	node->next=0;
 }
 
-//将timer_node添加到指定的timer中合适的链表
+//将 timer_node 添加到指定的 timer 中
+//需要根据将要添加的 timer_node 的 expire 来挑选位置
 static void
 add_node(struct timer *T,struct timer_node *node)
 {
 	int time=node->expire;
 	int current_time=T->time;
 	
-	//表示time和current_time的差距只在TIME_NEAR_MASK所标识的位中
+	//表示 time 和 current_time 两个值只在低 TIME_NEAR_MASK 位中
 	//也就是满足条件设立的精度
 	if ((time|TIME_NEAR_MASK)==(current_time|TIME_NEAR_MASK)) {
 		link(&T->near[time&TIME_NEAR_MASK],node);
 	}
 	else {
 		//这里也是比较差距，只是精度越来越大
-		//最开始是1111 1111 1111 11
-		//然后变成1111 1111 1111 1111 1111
-		//		  1111 1111 1111 1111 1111 1111 11
-		//		  1111 1111 1111 1111 1111 1111 1111 1111
+		//最开始是	1111 1111 1111 11
+		//然后变成	1111 1111 1111 1111 1111
+		//			1111 1111 1111 1111 1111 1111 11
+		//			1111 1111 1111 1111 1111 1111 1111 1111
 		int i;
 		int mask=TIME_NEAR << TIME_LEVEL_SHIFT;
 		for (i=0;i<3;i++) {
@@ -87,7 +88,8 @@ add_node(struct timer *T,struct timer_node *node)
 	}
 }
 
-//往指定的timer里面添加定时器消息和参数
+// sz 表示数据大小， arg 是数据， time 是过期秒数
+// arg 是 skynet_message
 static void
 timer_add(struct timer *T,void *arg,size_t sz,int time)
 {
@@ -102,7 +104,6 @@ timer_add(struct timer *T,void *arg,size_t sz,int time)
 	__sync_lock_release(&T->lock);
 }
 
-//更新timer里面的node，时间到了就被推送，不然就会更新位置到近一点的地方
 static void 
 timer_execute(struct timer *T)
 {
@@ -111,7 +112,6 @@ timer_execute(struct timer *T)
 	struct timer_node *current;
 	int mask,i,time;
 	
-	//将near数组中的某条链表处理了
 	while (T->near[idx].head.next) {
 		current=link_clear(&T->near[idx]);
 		
@@ -129,7 +129,6 @@ timer_execute(struct timer *T)
 	time = T->time >> TIME_NEAR_SHIFT;
 	i=0;
 	
-	//将另外四个等级的某一等级的某条链表中的节点重新插入到合适的位置
 	while ((T->time & (mask-1))==0) {
 		idx=time & TIME_LEVEL_MASK;
 		if (idx!=0) {
@@ -149,7 +148,6 @@ timer_execute(struct timer *T)
 	__sync_lock_release(&T->lock);
 }
 
-//创建一个timer
 static struct timer *
 timer_create_timer()
 {
@@ -174,6 +172,10 @@ timer_create_timer()
 	return r;
 }
 
+// session 作为一个整数传递，暂时并无太大意义。
+/*
+当 message 的 data 不为空的时候， sz 表示 data 大小
+*/
 void 
 skynet_timeout(int handle, int time, int session) {
 	struct skynet_message message;
@@ -181,6 +183,7 @@ skynet_timeout(int handle, int time, int session) {
 	message.destination = handle;
 	message.data = NULL;
 	message.sz = (size_t) session;
+	// time 为0属于特例，不进入 timer 队列，而是直接进入消息队列
 	if (time == 0) {
 		skynet_mq_push(&message);
 	} else {
@@ -188,18 +191,17 @@ skynet_timeout(int handle, int time, int session) {
 	}
 }
 
-//获取系统开机到现在的秒数，单位是100豪秒
+//计算系统开机到现在的秒数，单位是10豪秒
 static uint32_t
 _gettime(void) {
 	struct timespec ti;
 	clock_gettime(CLOCK_MONOTONIC, &ti);	//返回的是系统启动到现在的秒数和纳秒数
-	uint32_t t = (uint32_t)(ti.tv_sec & 0xffffff) * 100;
+	uint32_t t = (uint32_t)(ti.tv_sec & 0xffffff) * 100;	//秒数乘以 1000 等于毫秒数，那么乘以 100 就是10毫秒数
 	t += ti.tv_nsec / 10000000;	//本来应该是 纳秒 / 1000 000 000 * 100，也就是先转成秒，再乘以100
 
-	return t;	//返回的时间单位是 100毫秒
+	return t;	//返回的时间单位是 10毫秒
 }
 
-//取两次获取_gettime的差值，然后执行timer_execute
 void
 skynet_updatetime(void) {
 	uint32_t ct = _gettime();
@@ -213,7 +215,8 @@ skynet_updatetime(void) {
 	}
 }
 
-//获取系统开机到现在的秒数，单位是100豪秒
+//上一次执行 skynet_updatetime 的时间
+//时间计算是从系统开机开始计算的秒数，单位是10豪秒
 uint32_t 
 skynet_gettime(void) {
 	return TI->current;
