@@ -45,7 +45,7 @@ _start(int thread) {
 
 void 
 skynet_start(struct skynet_config * config) {
-	skynet_mq_init(config->mqueue_size);		//初始化消息队列
+	skynet_mq_init(config->mqueue_size);
 	skynet_module_init(config->module_path);
 	skynet_handle_init();
 	skynet_timer_init();

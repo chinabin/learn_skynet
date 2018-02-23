@@ -30,13 +30,12 @@ struct timer {
 	struct link_list t[4][TIME_LEVEL-1];
 	int lock;
 	int time;				// skynet 的滴答数，最开始是基于 current ，之后由 skynet 自己控制增加
-	uint32_t current;		//系统开机到现在的秒数，单位是100毫秒
+	uint32_t current;		//系统开机到现在的秒数，单位是10毫秒
 };
 
 static struct timer * TI = NULL;
 
-//清楚链表。使得 tail 指向 head ， head 的 next 指向空
-//与 link 函数紧密结合。确保 head->next 指向的是第一个节点， tail->next 指向空
+// 清除链表，返回原链表的第一个节点。
 static inline struct timer_node *
 link_clear(struct link_list *list)
 {
@@ -47,6 +46,7 @@ link_clear(struct link_list *list)
 	return ret;
 }
 
+//将 node 插入 list 尾端
 static inline void
 link(struct link_list *list,struct timer_node *node)
 {
@@ -63,17 +63,23 @@ add_node(struct timer *T,struct timer_node *node)
 	int time=node->expire;
 	int current_time=T->time;
 	
+	/*
+	(0000 0011 | 0000 1111) == 0000 1111
+	(0001 0011 | 0000 1111) == 0001 1111 != 0000 1111
+	*/
 	//表示 time 和 current_time 两个值只在低 TIME_NEAR_MASK 位中
-	//也就是满足条件设立的精度
+	//也就是满足条件设立的精度，也就是 2.56 秒内
 	if ((time|TIME_NEAR_MASK)==(current_time|TIME_NEAR_MASK)) {
 		link(&T->near[time&TIME_NEAR_MASK],node);
 	}
 	else {
-		//这里也是比较差距，只是精度越来越大
-		//最开始是	1111 1111 1111 11
-		//然后变成	1111 1111 1111 1111 1111
-		//			1111 1111 1111 1111 1111 1111 11
-		//			1111 1111 1111 1111 1111 1111 1111 1111
+		// 这里也是比较差距，只是精度越来越大
+		// mask 是从 TIME_NEAR (1 0000 0000)左移 TIME_LEVEL_SHIFT (6)位变成 1 0000 0000 0000 00
+		// 之后每次都是左移 TIME_LEVEL_SHIFT (6)位，比较的值变化如下
+		// 1111 1111 1111 11							-- 2 ^ 14 ，163.84秒，大概 2.8 分钟
+		// 1111 1111 1111 1111 1111						-- 2 ^ 20 ，10485.76秒，大概 2.9 小时
+		// 1111 1111 1111 1111 1111 1111 11				-- 2 ^ 26 ，67108864秒，大概 7.8 天
+		// 1111 1111 1111 1111 1111 1111 1111 1111		-- 2 ^ 32 ，4294967296秒，大概 497 天
 		int i;
 		int mask=TIME_NEAR << TIME_LEVEL_SHIFT;
 		for (i=0;i<3;i++) {
@@ -82,9 +88,18 @@ add_node(struct timer *T,struct timer_node *node)
 			}
 			mask <<= TIME_LEVEL_SHIFT;
 		}
-		//(TIME_NEAR_SHIFT + i*TIME_LEVEL_SHIFT)获取了右移的位数
-		//(time>>(TIME_NEAR_SHIFT + i*TIME_LEVEL_SHIFT))将要检查的字节送到嘴巴边和TIME_LEVEL_MASK做与操作，其结果就是二维数组的第二个索引
-		link(&T->t[i][((time>>(TIME_NEAR_SHIFT + i*TIME_LEVEL_SHIFT)) & TIME_LEVEL_MASK)-1],node);	
+
+		/*
+		 二维数组 t 的第一个下标表示的是等级，例如 0 表示容纳的时间是[0, 255]，而 1 表示容纳的时间是[256, 16383]
+		 越往后靠，权重越大。上面的循环就是为了找到 time 所属的等级，也就是 i 。
+		 第二个下标表示的是位置，也就是说找到组织之后，需要找到自己的位置。
+		 time>>(TIME_NEAR_SHIFT + i*TIME_LEVEL_SHIFT) 得到了一个 1 <= X <= TIME_LEVEL_MASK 的值
+		 也就是 time 应该进入的链表。
+		 之所以要与上 TIME_LEVEL_MASK 是因为如果传入的 time 非常大，例如是一万年，那么右移之后的值还是大于我们预设的最大值，
+		 所以做了一个裁剪。
+		*/
+		int tmp = (time>>(TIME_NEAR_SHIFT + i*TIME_LEVEL_SHIFT)) & TIME_LEVEL_MASK;
+		link(&T->t[i][tmp-1],node);	
 	}
 }
 
@@ -129,6 +144,19 @@ timer_execute(struct timer *T)
 	time = T->time >> TIME_NEAR_SHIFT;
 	i=0;
 	
+	/*
+	 1. 首先，记住一件事：对于 near 数组，单位是 1 个嘀嗒，对于 t[0] 数组，单位是 25.6 个嘀嗒，越往后单位越大。
+	 	就想象有几个表，有的是每一秒动一下，有的是每十秒动一下...
+	 2. 现在抽象化，就假设有一个数组，长度为len，有一个变量 index 作为索引，不停的从第一个位置走到最后一个位置，
+	 	当走到最后一个位置又折回走第一个位置。
+	 	T->time & TIME_LEVEL_MASK 表示的就是这个 index 。
+	 3. 在 add_node 中， node->expire 是 T->time + expire 得到的，所以当求 near 位置的时候 time&TIME_NEAR_MASK
+	 	可以拆开，(T->time + expire) & TIME_NEAR_MASK ，T->time & TIME_LEVEL_MASK 就是当前的 index ，expire & TIME_LEVEL_MASK 其实就是 expire，
+	 	所以其实找的是，当前 index 后面的 expire 个位置。
+	 4. 在下面的循环中 idx 也是一个数组的索引， idx 会不停的往后走，所以 idx 后面的索引都不用动，轮到谁了就是谁。
+	 	但是 idx 前面的索引必须动，因为 idx 前面的索引肯定是新加的，如果不是新加的那么早就执行了。既然是新加的，就
+	 	必须不停的更新。
+	*/
 	while ((T->time & (mask-1))==0) {
 		idx=time & TIME_LEVEL_MASK;
 		if (idx!=0) {
