@@ -55,6 +55,7 @@ _parm(char *msg, int sz, int command_sz) {
 	msg[i-command_sz] = '\0';
 }
 
+//转寄
 static void
 _forward_agent(struct gate * g, int id, char * addr) {
 	struct connection * agent = _id_to_agent(g,id);

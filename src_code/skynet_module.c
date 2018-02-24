@@ -68,7 +68,7 @@ _open_sym(struct skynet_module *mod) {
 	return mod->init == NULL;
 }
 
-//将 name 对应的so库加载进 modules 
+//将 name 对应的so库加载进 modules ，如果已存在，则返回
 struct skynet_module * 
 skynet_module_query(const char * name) {
 	struct skynet_module * result = _query(name);
