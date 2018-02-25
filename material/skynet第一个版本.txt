@@ -1,0 +1,6 @@
+一、阅读情况
+	1. skynet_module
+		将动态链接库抽象为 skynet_module ，设置 create/init/release 接口，之后会创建一个或者多个实例。
+		通过 modules 结构来管理所有的 skynet_module 。
+	2. skynet_server
+		新建服务，以及负责分发消息

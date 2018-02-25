@@ -10,17 +10,17 @@
 #define MAX_MODULE_TYPE 32
 #define SO ".so"
 
-//用来管理skynet_module
+// 用来管理skynet_module
 struct modules {
-	int count;		//当前已经存在的so库个数
-	int lock;		//锁，防止同时添加
-	const char * path;	//所有so库默认路径
+	int count;				// 当前已经存在的so库个数
+	int lock;				// 锁，防止同时添加 skynet_module
+	const char * path;		// 所有so库默认路径
 	struct skynet_module m[MAX_MODULE_TYPE];
 };
 
 static struct modules * M = NULL;
  
-//打开 name 所指定的so库并返回动态链接库句柄，失败返回NULL
+// 从默认的动态链接库目录找到并打开 name 所指定的so库并返回动态链接库句柄，失败返回NULL
 static void *
 _try_open(struct modules *m, const char * name) {
 	size_t path_size = strlen(m->path);
@@ -39,7 +39,7 @@ _try_open(struct modules *m, const char * name) {
 	return dl;
 }
 
-//查找 name 对应的so库是否已经加载
+// 查询 name 对应的so库是否已经加载
 static struct skynet_module * 
 _query(const char * name) {
 	int i;
@@ -51,8 +51,8 @@ _query(const char * name) {
 	return NULL;
 }
 
-//给三个约定的函数指针赋值
-//返回0表示成功
+// 给三个约定的函数指针赋值
+// 返回0表示成功
 static int
 _open_sym(struct skynet_module *mod) {
 	size_t name_size = strlen(mod->name);
@@ -68,15 +68,18 @@ _open_sym(struct skynet_module *mod) {
 	return mod->init == NULL;
 }
 
-//将 name 对应的so库加载进 modules ，如果已存在，则返回
+// 将 name 对应的so库加载进 modules ，如果已存在，则返回
 struct skynet_module * 
 skynet_module_query(const char * name) {
+	// 查询 name 对应的库是否已经加载，如果已经加载则返回
 	struct skynet_module * result = _query(name);
 	if (result)
 		return result;
 
+	// 加锁，避免插入冲突
 	while(__sync_lock_test_and_set(&M->lock,1)) {}
 
+	// 可能在等待解锁期间 name 已经被加载了
 	result = _query(name); // double check
 
 	if (result == NULL && M->count < MAX_MODULE_TYPE) {
@@ -111,6 +114,7 @@ skynet_module_insert(struct skynet_module *mod) {
 	__sync_lock_release(&M->lock);
 }
 
+// 调用 create 接口，返回实例指针，后面会传入 init 函数和 release 函数
 void * 
 skynet_module_instance_create(struct skynet_module *m) {
 	if (m->create) {
@@ -120,6 +124,7 @@ skynet_module_instance_create(struct skynet_module *m) {
 	}
 }
 
+// init 接口实现中需要设置好回调接口
 int
 skynet_module_instance_init(struct skynet_module *m, void * inst, struct skynet_context *ctx, const char * parm) {
 	return m->init(inst, ctx, parm);
@@ -132,7 +137,7 @@ skynet_module_instance_release(struct skynet_module *m, void *inst) {
 	}
 }
 
-//传入默认so库的路径来初始化modules
+// 传入默认so库的路径来初始化 modules 结构体
 void 
 skynet_module_init(const char *path) {
 	struct modules *m = malloc(sizeof(*m));

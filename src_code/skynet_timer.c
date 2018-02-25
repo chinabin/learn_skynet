@@ -206,8 +206,9 @@ timer_create_timer()
 }
 
 /*
-当 message 的 data 不为空的时候， sz 表示 data 大小。
-当 message 的 data 为空的时候， sz 表示两方通信的一个简单约定。
+ 添加定时器消息
+ 当 message 的 data 不为空的时候， sz 表示 data 大小。
+ 当 message 的 data 为空的时候， sz 表示两方通信的一个简单约定。
 */
 void 
 skynet_timeout(int handle, int time, int session) {
@@ -248,7 +249,7 @@ skynet_updatetime(void) {
 	}
 }
 
-// 计时器，单位是10豪秒
+// 计时器，系统开机到现在的秒数，单位是 10 毫秒
 uint32_t 
 skynet_gettime(void) {
 	return TI->current;
