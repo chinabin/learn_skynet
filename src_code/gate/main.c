@@ -13,18 +13,18 @@
 #define WATCHDOG ".watchdog"
 
 struct connection {
-	char * agent;
-	int connection_id;
+	char * agent;			// 转寄地址。接到每个连接的数据都会默认发往 watchdog ，如果设置了转寄地址则发往转寄地址
+	int connection_id;		// skynet 内部的 socket 标号
 	int uid;
 };
 
 struct gate {
 	struct mread_pool * pool;
-	int id_index;
+	int id_index;					// 不停增长，计算 uid 
 	int cap;
 	int max_connection;
-	struct connection ** agent;
-	struct connection * map;
+	struct connection ** agent;		// 根据 uid 计算 hash 值作为索引
+	struct connection * map;		// connection_id 作为索引
 };
 
 struct gate *
@@ -41,6 +41,7 @@ _id_to_agent(struct gate *g,int uid) {
 	return g->agent[uid & (g->cap - 1)];
 }
 
+// 将 msg 中命令和参数之间的多余空格消除
 static void
 _parm(char *msg, int sz, int command_sz) {
 	while (command_sz < sz) {
@@ -55,7 +56,7 @@ _parm(char *msg, int sz, int command_sz) {
 	msg[i-command_sz] = '\0';
 }
 
-//转寄
+// 转寄
 static void
 _forward_agent(struct gate * g, int id, char * addr) {
 	struct connection * agent = _id_to_agent(g,id);
@@ -65,6 +66,7 @@ _forward_agent(struct gate * g, int id, char * addr) {
 	agent->agent = strdup(addr);
 }
 
+// gate 命令处理
 static void
 _ctrl(struct skynet_context * ctx, struct gate * g, const void * msg, int sz) {
 	char tmp[sz+1];
@@ -74,6 +76,7 @@ _ctrl(struct skynet_context * ctx, struct gate * g, const void * msg, int sz) {
 	int i;
 	if (sz == 0)
 		return;
+	// i 是命令的长度
 	for (i=0;i<sz;i++) {
 		if (command[i]==' ') {
 			break;
@@ -88,7 +91,7 @@ _ctrl(struct skynet_context * ctx, struct gate * g, const void * msg, int sz) {
 		mread_close_client(g->pool,connection_id);
 		return;
 	}
-	if (memcmp(command,"forward",i)==0) {
+	if (memcmp(command,"forward",i)==0) {	// forward addr id
 		_parm(tmp, sz, i);
 		char * start = tmp;
 		char * data = strsep(&start, " ");
@@ -101,6 +104,7 @@ _ctrl(struct skynet_context * ctx, struct gate * g, const void * msg, int sz) {
 	skynet_error(ctx, "[gate] Unkown command : %s", command);
 }
 
+// 从 ctx 发送消息到 watchdog
 static void
 _report(struct skynet_context * ctx, const char * data, ...) {
 	va_list ap;
@@ -116,6 +120,7 @@ _report(struct skynet_context * ctx, const char * data, ...) {
 	skynet_send(ctx, WATCHDOG, strdup(tmp), n);
 }
 
+// 给 watchdog 发送 data 命令
 static void
 _forward(struct skynet_context * ctx,struct gate *g, int uid, void * data, size_t len) {
 	struct connection * agent = _id_to_agent(g,uid);
