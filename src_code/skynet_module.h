@@ -9,15 +9,15 @@ typedef void (*skynet_dl_release)(void * inst);
 
 // skynet 中对so库的抽象
 struct skynet_module {
-	const char * name;			//so库名
-	void * module;				//动态链接库句柄
+	const char * name;			// so库名
+	void * module;				// 动态链接库句柄
 	skynet_dl_create create;	// 调用创建函数，返回实例指针，之后作为 init 函数的参数传入
 	skynet_dl_init init;		// 返回 0 为成功
 	skynet_dl_release release;
 };
 
 /*
- 将skynet_module插入modules，暂时没有使用
+ 将 skynet_module 插入 modules ，暂时没有使用
 */
 void skynet_module_insert(struct skynet_module *mod);
 /*

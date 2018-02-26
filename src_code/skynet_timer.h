@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /*
- 添加定时器消息
+ 添加系统定时器消息( source 等于 -1 )，其实就是自己给自己发消息
  当 message 的 data 不为空的时候， sz 表示 data 大小。
  当 message 的 data 为空的时候， sz 表示两方通信的一个简单约定。
 */

@@ -20,6 +20,7 @@ function command:data(data)
 	print("[watchdog] data",self,#data,data)
 end
 
+-- 给 watchdog 发消息的回调函数
 skynet.callback(function(from , message)
 	local id, cmd , parm = string.match(message, "(%d+) (%w+) ?(.*)")
 	id = tonumber(id)

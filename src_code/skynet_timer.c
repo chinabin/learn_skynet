@@ -64,11 +64,11 @@ add_node(struct timer *T,struct timer_node *node)
 	int current_time=T->time;
 	
 	/*
-	(0000 0011 | 0000 1111) == 0000 1111
-	(0001 0011 | 0000 1111) == 0001 1111 != 0000 1111
+	 (0000 0011 | 0000 1111) == 0000 1111
+	 (0001 0011 | 0000 1111) == 0001 1111 != 0000 1111
 	*/
-	//表示 time 和 current_time 两个值只在低 TIME_NEAR_MASK 位中
-	//也就是满足条件设立的精度，也就是 2.56 秒内
+	// 表示 time 和 current_time 两个值只在低 TIME_NEAR_MASK 位中
+	// 也就是满足条件设立的精度，也就是 2.56 秒内
 	if ((time|TIME_NEAR_MASK)==(current_time|TIME_NEAR_MASK)) {	// (time - current_time) <= TIME_NEAR_MASK
 		link(&T->near[time&TIME_NEAR_MASK],node);
 	}
@@ -206,7 +206,7 @@ timer_create_timer()
 }
 
 /*
- 添加定时器消息
+ 添加系统定时器消息( source 等于 -1 )，其实就是自己给自己发消息
  当 message 的 data 不为空的时候， sz 表示 data 大小。
  当 message 的 data 为空的时候， sz 表示两方通信的一个简单约定。
 */
@@ -225,7 +225,7 @@ skynet_timeout(int handle, int time, int session) {
 	}
 }
 
-// 计算系统开机到现在的秒数，单位是10豪秒
+// 计算系统开机到现在的秒数，单位是 10 豪秒
 static uint32_t
 _gettime(void) {
 	struct timespec ti;
@@ -233,7 +233,7 @@ _gettime(void) {
 	uint32_t t = (uint32_t)(ti.tv_sec & 0xffffff) * 100;	// 秒数乘以 1000 等于毫秒数，那么乘以 100 就是10毫秒数
 	t += ti.tv_nsec / 10000000;	// 本来应该是 (纳秒 / 1000 000 000 * 100)，也就是先转成秒，再乘以100
 
-	return t;	// 返回的时间单位是 10毫秒
+	return t;	// 返回的时间单位是 10 毫秒
 }
 
 void
@@ -255,7 +255,7 @@ skynet_gettime(void) {
 	return TI->current;
 }
 
-// 创建全局timer TI并初始化
+// 创建全局 timer TI 并初始化
 void 
 skynet_timer_init(void) {
 	TI = timer_create_timer();

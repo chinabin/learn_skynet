@@ -9,6 +9,7 @@
 
 #define LOG_MESSAGE_SIZE 1024
 
+// 从 context->handle 中给 logger 发消息
 void 
 skynet_error(struct skynet_context * context, const char *msg, ...) {
 	static int logger = -1;
