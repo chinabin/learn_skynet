@@ -13,13 +13,12 @@
 #define DEFAULT_SLOT_SIZE 4
 
 struct handle_name {
-	char * name;		//名字
-	int handle;			//句柄
+	char * name;		// 服务名字
+	int handle;			// 服务编号
 };
 
-//服务集合
 struct handle_storage {
-	struct rwlock lock;
+	struct rwlock lock;	// 读写锁
 
 	/*
 	一个不停增长的索引，确保永不重复，用来计算 handle 值
