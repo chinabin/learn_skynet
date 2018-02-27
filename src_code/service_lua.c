@@ -20,9 +20,10 @@ _load(lua_State *L, char ** filename) {
 	return r != LUA_OK;
 }
 
+// 加载并执行 snlua XX.lua parms 中的 XX.lua 代码并传入 parms 参数
 int
 snlua_init(lua_State *L, struct skynet_context *ctx, const char * args) {
-	lua_gc(L, LUA_GCSTOP, 0);
+	lua_gc(L, LUA_GCSTOP, 0);	// QUESTION: 这里以及后面的 lua_gc 作用
 	luaL_openlibs(L);		//打开 Lua 标准库
 	//下面两句等价于：找到 LUA_REGISTRYINDEX 索引所在的表t，使得t["skynet_context"] = ctx
 	//将 ctx 参数最终传递给 luaopen_skynet 函数

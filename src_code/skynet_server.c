@@ -201,7 +201,7 @@ skynet_context_message_dispatch(void) {
 
 const char * 
 skynet_command(struct skynet_context * context, const char * cmd , const char * parm) {
-	if (strcmp(cmd,"TIMEOUT") == 0) {	// 添加一个定时器消息
+	if (strcmp(cmd,"TIMEOUT") == 0) {	// 添加一个定时器消息，自己给自己发消息
 		//time:session
 		char * session_ptr = NULL;
 		//strtol会将parm按照10指定的基数转换然后返回。遇到的第一个非法值会将地址赋值给第二个参数

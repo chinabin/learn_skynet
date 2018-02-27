@@ -3,12 +3,9 @@
 
 struct skynet_context;
 
-//ctx只有被handle_storage管制的时候才有handle的概念
-
-//将 ctx 注册成为服务( handle ) ， 存储在 handle_storage 中
-//返回唯一服务( handle )标识
+// 注册服务，返回服务编号
 int skynet_handle_register(struct skynet_context *);
-//注销服务
+//注销服务，并尝试(如果 ctx 的引用计数为0)释放对应 ctx 的资源
 void skynet_handle_retire(int handle);
 //从handle_storage中获取此handle对应的ctx，并将引用计数加1
 struct skynet_context * skynet_handle_grab(int handle);
