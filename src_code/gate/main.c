@@ -120,7 +120,7 @@ _report(struct skynet_context * ctx, const char * data, ...) {
 	skynet_send(ctx, WATCHDOG, strdup(tmp), n);
 }
 
-// 给 watchdog 发送 data 命令
+// 给 watchdog 或者 agent 发送 data 命令
 static void
 _forward(struct skynet_context * ctx,struct gate *g, int uid, void * data, size_t len) {
 	struct connection * agent = _id_to_agent(g,uid);
@@ -206,7 +206,7 @@ _cb(struct skynet_context * ctx, void * ud, const char * uid, const void * msg, 
 			goto _break;
 		}
 
-		_forward(ctx, g, id, data, *plen);
+		_forward(ctx, g, id, data, *plen);	// 将接收到的数据发往 watchdog 或者 agent 
 		mread_yield(m);
 _break:
 		skynet_command(ctx, "TIMEOUT","0:0");
