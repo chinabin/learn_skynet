@@ -4,10 +4,11 @@
 #include <assert.h>
 #include <stdio.h>
 
+// 通过 fd 来映射 id
 struct node {
-	int fd;				//用来计算哈希索引
-	int id;
-	struct node * next;	//指向fd相同或者fd与map size做与运算的结果相同的node的位置
+	int fd;				// 通过 fd & (m->size-1) 来计算哈希索引，也就是 map 中的位置
+	int id;				// 用户自定义的用来存储的值
+	struct node * next;	// 指向fd相同或者fd与map size做与运算的结果相同的node的位置
 };
 
 struct map {
@@ -15,8 +16,11 @@ struct map {
 	struct node * hash;
 };
 
-//新建map，size等于第一个大于max的2的幂。
-//例如max等于10，那么第一个大于10的2的次幂是16。如果max等于16，那么第一个大于16的2的次幂是32.
+/*
+ 新建 map ， size 等于第一个大于 max 的 2 的幂。
+ 例如 max 等于 10 ，那么第一个大于 10 的 2 的次幂是 16 。
+ 如果 max 等于 16 ，那么第一个大于 16 的 2 的次幂是 32 。
+*/
 struct map * 
 map_new(int max) {
 	int sz = 1;
@@ -35,14 +39,16 @@ map_new(int max) {
 	return m;
 }
 
-//删除map
+// 删除 map
 void 
 map_delete(struct map * m) {
 	free(m->hash);
 	free(m);
 }
 
-//从map的node里面找到fd等于指定fd的node
+/*
+ 根据 fd ，从 map 里找到对应的 node ，并返回 id
+*/
 int 
 map_search(struct map * m, int fd) {
 	int hash = fd & (m->size-1);
@@ -56,32 +62,47 @@ map_search(struct map * m, int fd) {
 }
 
 /*
-每个node的索引都是通过fd计算出来的，不同的fd可能得到同样的索引。
-如果两个不同的fd得到了同一个索引，那么后面将要插入的那个node会重新计算出另外一个索引，
-因为占用了一个不属于它的位置，所以当属于那个位置的node插入的时候，错误插入的那个node会挪开
+ 通过 fd 计算一个索引，然后往 map 中插入一个新的 node。
+ 当出现碰撞(计算出来的索引已经被占用)的时候，假设占用的 fd 为 f_A ，传入的 fd 为 f_B ：
+ 1. (f_A & (m->size-1)) == (f_B & (m->size-1))，有亲戚关系
+ 	那么需要把 f_B 对应的 node_B 插入到一个空闲位置，
+ 	然后让 f_A 对应的 node_A 的 next 指针指向 node_B。
+ 2. (f_A & (m->size-1)) != (f_B & (m->size-1))，没任何关系
+ 	那么需要找到 f_A 对应的 node_A 的父 node ，也就是 node_AA，
+ 	使得 node_AA->next = node_A->next ，然后重新为 node_A 找到一个新的位置。
+ 	然后把 node_B 的数据填充到 node_A。
 */
 void 
 map_insert(struct map * m, int fd, int id) {
 	int hash = fd & (m->size-1);
 	struct node * n = &m->hash[hash];
-	if (n->fd < 0) {	//表示未占用，这个fd还未存在于map
+	if (n->fd < 0) {	// 位置可用
 		n->fd = fd;
 		n->id = id;
 		return;
 	}
 	
+	// 发生碰撞，第二种情况
 	int ohash = n->fd & (m->size-1);
 	if (hash != ohash) {
-		//last是错误的node所属的队列的第一个元素
+		/*
+		 因为是一个萝卜一个坑，如果存在一条链(fd & (m->size-1)的值全部相等)，
+		 那么除了链头，其余元素其实都是占着属于别的萝卜的坑。
+		 所以当我取这条链上任意一个 node 的 fd 所计算出来的索引都是一样，并且，
+		 这个索引的位置就是链头。
+		*/
 		struct node * last = &m->hash[ohash];
-		//m->hash[hash]是错误的node，因为现在要把它的位置挪开，所以需要删除它
+		/*
+		 last 就是链头，而 n(也就是 m->hash[hash]) 是需要腾出来的位置。
+		 下面的循环就是找到 n 的父节点，做交接
+		*/
 		while (last->next != &m->hash[hash]) {
 			last = last->next;
 		}
-		//找到错误node的上一个元素然后将next指针指向错误node的下一个元素，&m->hash[hash]就是n
+		// 交接
 		last->next = n->next;
 
-		//为错误的node去重新找位置，并且将错误node的数据更新为正确的数据
+		// 为错误的node去重新找位置，并且将错误 node 的数据更新为正确的数据
 		int ofd = n->fd;
 		int oid = n->id;
 		n->fd = fd;
@@ -91,7 +112,7 @@ map_insert(struct map * m, int fd, int id) {
 		return;
 	}
 
-	//两个不同的fd对应了一个相同的索引，现在需要给后面那个node找到一个新的索引
+	// 发生碰撞，第一种情况
 	int last = (n - m->hash) * 2;
 	int i;
 	for (i=0;i<m->size;i++) {
@@ -108,16 +129,17 @@ map_insert(struct map * m, int fd, int id) {
 	assert(0);
 }
 
+// 去除 node->fd 等于 fd 的 node
 void
 map_erase(struct map *m , int fd) {
 	int hash = fd & (m->size-1);
 	struct node * n = &m->hash[hash];
 	if (n->fd == fd) {
-		if (n->next == NULL) {		//这个fd对应的node只有一个
+		if (n->next == NULL) {		// 这个 fd 对应的 node 只有一个
 			n->fd = -1;
 			return;
 		}
-		//这个fd对应的node不止一个，那么就把当前这个node删了，把这个node后面的node前移
+		//这个 fd 对应的 node 不止一个，那么就把当前这个 node 删了，把这个 node 后面的node前移
 		struct node * next = n->next;
 		n->fd = next->fd;
 		n->id = next->id;
@@ -126,6 +148,11 @@ map_erase(struct map *m , int fd) {
 		next->next = NULL;
 		return;
 	}
+	/*
+	 后面的情况是这样: 
+	 一条链，因为除了链头其余元素都是占用空闲位置，但是每个元素的 fd 所计算出来的索引都是一样，
+	 现在既然传入的 fd 找到了这条链，那么 fd 就可能存在在这条链上。
+	*/
 	if (n->next == NULL) {
 		return;
 	}
