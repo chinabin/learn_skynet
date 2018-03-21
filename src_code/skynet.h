@@ -1,6 +1,9 @@
 #ifndef SKYNET_H
 #define SKYNET_H
 
+/*
+对第三方提供的接口，让第三方可以编写自己的服务
+*/
 #include <stddef.h>
 
 struct skynet_context;

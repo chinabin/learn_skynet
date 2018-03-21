@@ -22,7 +22,7 @@ struct message_queue * skynet_mq_create(int cap);
 void skynet_mq_release(struct message_queue *q);
 // 从指定消息队列头中取出一个消息，返回此消息的目的地，返回 -1 表示阻塞( 也就是没消息 )
 int skynet_mq_leave(struct message_queue *q, struct skynet_message *message);
-// 将指定新消息添加到队列尾
+// 将新消息添加到指定队列尾，队列如果满了则扩大一倍
 void skynet_mq_enter(struct message_queue *q, struct skynet_message *message);
 
 // skynet_mq_create 的语法糖，创建消息队列 Q

@@ -10,7 +10,7 @@
 #define MAX_MODULE_TYPE 32
 #define SO ".so"
 
-// 用来管理skynet_module
+// 用来管理 skynet_module
 struct modules {
 	int count;				// 当前已经存在的so库个数
 	int lock;				// 锁，防止同时添加 skynet_module
@@ -23,6 +23,7 @@ static struct modules * M = NULL;
 // 从默认的动态链接库目录找到并打开 name 所指定的so库并返回动态链接库句柄，失败返回NULL
 static void *
 _try_open(struct modules *m, const char * name) {
+	// 构造完成so库路径
 	size_t path_size = strlen(m->path);
 	size_t name_size = strlen(name);
 	char tmp[path_size + name_size + sizeof(SO)];
@@ -109,7 +110,7 @@ skynet_module_insert(struct skynet_module *mod) {
 	struct skynet_module * m = _query(mod->name);
 	assert(m == NULL && M->count < MAX_MODULE_TYPE);
 	int index = M->count;
-	M->m[index] = *mod;
+	M->m[index] = *mod;		// QUESTION: 这里指针进行浅复制，会有问题
 	++M->count;
 	__sync_lock_release(&M->lock);
 }
@@ -124,7 +125,10 @@ skynet_module_instance_create(struct skynet_module *m) {
 	}
 }
 
-// init 接口实现中需要设置好回调接口
+/*
+ 1. init 接口实现中需要设置好回调接口，之后处理消息的时候需要调用
+ 2. 返回0表示成功
+*/
 int
 skynet_module_instance_init(struct skynet_module *m, void * inst, struct skynet_context *ctx, const char * parm) {
 	return m->init(inst, ctx, parm);

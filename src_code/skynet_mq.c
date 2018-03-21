@@ -6,9 +6,9 @@
 
 struct message_queue {
 	int cap;		// 消息队列能容纳的消息数
-	int head;		// 指向当前可以取出消息的位置，由取出操作对应的函数来管理
-	int tail;		// 指向当前可以插入的队列中的位置，由插入操作对应的函数来管理
-	int lock;		// 自旋锁
+	int head;		// 指向当前可以取出消息的位置，由取出操作 skynet_mq_leave 来管理
+	int tail;		// 指向当前可以插入的队列中的位置，由插入操作 skynet_mq_enter 来管理
+	int lock;		// 自旋锁，确保添加消息和取出消息不出错
 	struct skynet_message *queue;
 };
 
@@ -64,7 +64,7 @@ skynet_mq_leave(struct message_queue *q, struct skynet_message *message) {
 	return ret;
 }
 
-// 将新消息添加到指定队列尾
+// 将新消息添加到指定队列尾，队列如果满了则扩大一倍
 void 
 skynet_mq_enter(struct message_queue *q, struct skynet_message *message) {
 	_lock_queue(q);

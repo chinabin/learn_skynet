@@ -28,7 +28,7 @@ struct handle_storage {
 	// 下标通过 handle 计算得来：(handle & (s->slot_size-1))
 	struct skynet_context ** slot;
 	
-	// 每个服务都可以设置一个名字(但不是必须)，名字与服务是通过handle来关联的
+	// 每个服务都可以设置一个名字(但不是必须)，名字与服务是通过 handle 来关联的
 	int name_cap;		// 能容纳的 handle_name 数目，由于 handle_name 和 hadle 不是必须的一一对应，所以开始的时候这个值比较小
 	int name_count;		// 已有的 handle_name 个数
 	/* 
