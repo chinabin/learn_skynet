@@ -1,6 +1,7 @@
 #ifndef SKYNET_TIMER_H
 #define SKYNET_TIMER_H
 
+#include "skynet_system.h"
 #include <stdint.h>
 
 /*

@@ -46,9 +46,9 @@ _unlock_queue(struct message_queue *q) {
 }
 
 // 从指定消息队列头中取出一个消息，返回此消息的目的地，返回 -1 表示阻塞( 也就是没消息 )
-int 
+uint32_t 
 skynet_mq_leave(struct message_queue *q, struct skynet_message *message) {
-	int ret = -1;
+	uint32_t ret = 0;
 	_lock_queue(q);
 
 	if (q->head != q->tail) {
@@ -94,7 +94,7 @@ skynet_mq_enter(struct message_queue *q, struct skynet_message *message) {
 }
 
 // skynet_mq_leave 的语法糖，从 Q 中弹出队列头消息
-int 
+uint32_t 
 skynet_mq_pop(struct skynet_message *message) {
 	return skynet_mq_leave(Q,message);
 }

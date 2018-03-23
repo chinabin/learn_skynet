@@ -16,9 +16,9 @@ void skynet_context_grab(struct skynet_context *);
 // 引用计数 为 0 则销毁
 struct skynet_context * skynet_context_release(struct skynet_context *);
 // 返回 ctx 的 handle
-int skynet_context_handle(struct skynet_context *);
+uint32_t skynet_context_handle(struct skynet_context *);
 // 设置 ctx 的 handle
-void skynet_context_init(struct skynet_context *, int handle);
+void skynet_context_init(struct skynet_context *, uint32_t handle);
 // 未实现
 void skynet_context_push(struct skynet_context *, struct skynet_message *message);
 // 未实现

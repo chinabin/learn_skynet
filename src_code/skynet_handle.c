@@ -14,7 +14,7 @@
 
 struct handle_name {
 	char * name;		// 服务名字
-	int handle;			// 服务编号
+	uint32_t handle;	// 服务编号
 };
 
 struct handle_storage {
@@ -23,7 +23,8 @@ struct handle_storage {
 	/*
 	 一个不停增长的索引，确保永不重复，用来计算 handle 值
 	*/
-	int handle_index;
+	uint32_t harbor;
+	uint32_t handle_index;
 	int slot_size;		// 能容纳的 skynet_context 数目
 	// 下标通过 handle 计算得来：(handle & (s->slot_size-1))
 	struct skynet_context ** slot;
@@ -41,7 +42,7 @@ struct handle_storage {
 static struct handle_storage *H = NULL;
 
 // 注册服务，返回服务编号
-int 
+uint32_t
 skynet_handle_register(struct skynet_context *ctx) {
 	struct handle_storage *s = H;
 
@@ -54,14 +55,14 @@ skynet_handle_register(struct skynet_context *ctx) {
 			int hash = (i+s->handle_index) & (s->slot_size-1);
 			if (s->slot[hash] == NULL) {
 				s->slot[hash] = ctx;
-				int handle = s->handle_index + i;
+				uint32_t handle = s->handle_index + i;
 				skynet_context_init(ctx, handle);	// 设置 ctx 的 handle
 
 				rwlock_wunlock(&s->lock);
 
 				s->handle_index = handle + 1;
 
-				return handle;
+				return (handle & HANDLE_MASK) | s->harbor;
 			}
 		}
 		//空间不够，分配空间并迁移数据
@@ -80,12 +81,12 @@ skynet_handle_register(struct skynet_context *ctx) {
 
 //注销服务，并尝试(如果 ctx 的引用计数为0)释放对应 ctx 的资源
 void
-skynet_handle_retire(int handle) {
+skynet_handle_retire(uint32_t handle) {
 	struct handle_storage *s = H;
 
 	rwlock_wlock(&s->lock);		// 写锁，确保对 slot 和 name 数组的操作无冲突
 
-	int hash = handle & (s->slot_size-1);
+	uint32_t hash = handle & (s->slot_size-1);
 	struct skynet_context * ctx = s->slot[hash];
 	if (skynet_context_handle(ctx) == handle) {
 		skynet_context_release(ctx);
@@ -111,13 +112,13 @@ skynet_handle_retire(int handle) {
 
 // 获取此 handle 对应的 ctx ，并将引用计数加 1
 struct skynet_context * 
-skynet_handle_grab(int handle) {
+skynet_handle_grab(uint32_t handle) {
 	struct handle_storage *s = H;
 	struct skynet_context * result = NULL;
 
 	rwlock_rlock(&s->lock);	// 读锁，确保读取 slot 数组没问题
 
-	int hash = handle & (s->slot_size-1);
+	uint32_t hash = handle & (s->slot_size-1);
 	struct skynet_context * ctx = s->slot[hash];
 	if (skynet_context_handle(ctx) == handle) {
 		result = ctx;
@@ -130,13 +131,13 @@ skynet_handle_grab(int handle) {
 }
 
 // 通过名字获取对应的handle， -1 表示没有
-int 
+uint32_t 
 skynet_handle_findname(const char * name) {
 	struct handle_storage *s = H;
 
 	rwlock_rlock(&s->lock);	// 读锁，确保读取 slot 数组没问题
 
-	int handle = -1;
+	uint32_t handle = 0;
 
 	int begin = 0;
 	int end = s->name_count - 1;
@@ -146,6 +147,7 @@ skynet_handle_findname(const char * name) {
 		int c = strcmp(n->name, name);
 		if (c==0) {
 			handle = n->handle;
+			handle |= s->harbor;
 			break;
 		}
 		if (c<0) {
@@ -163,7 +165,7 @@ skynet_handle_findname(const char * name) {
 // 在 handle_storage 的 name 中，在索引为 before 的前面插入一个 handle_name
 // 也就是将 before 位置和之后的位置都后移，然后将新的数据放在 before 位置
 static void
-_insert_name_before(struct handle_storage *s, char *name, int handle, int before) {
+_insert_name_before(struct handle_storage *s, char *name, uint32_t handle, int before) {
 	if (s->name_count >= s->name_cap) {		//空间不够，扩容
 		s->name_cap *= 2;
 		struct handle_name * n = malloc(s->name_cap * sizeof(struct handle_name));
@@ -189,7 +191,7 @@ _insert_name_before(struct handle_storage *s, char *name, int handle, int before
 
 //在 handle_storage 中为 name 找到一个合适的位置并插入
 static const char *
-_insert_name(struct handle_storage *s, const char * name, int handle) {
+_insert_name(struct handle_storage *s, const char * name, uint32_t handle) {
 	int begin = 0;
 	int end = s->name_count - 1;
 	while (begin<=end) {
@@ -214,7 +216,7 @@ _insert_name(struct handle_storage *s, const char * name, int handle) {
 
 //为 handle 定义名字
 const char * 
-skynet_handle_namehandle(int handle, const char *name) {
+skynet_handle_namehandle(uint32_t handle, const char *name) {
 	rwlock_wlock(&H->lock);		// 写锁，确保插入名字无冲突
 
 	const char * ret = _insert_name(H, name, handle);
@@ -226,7 +228,7 @@ skynet_handle_namehandle(int handle, const char *name) {
 
 //初始化handle_storage
 void 
-skynet_handle_init(void) {
+skynet_handle_init(int harbor) {
 	assert(H==NULL);
 	struct handle_storage * s = malloc(sizeof(*H));
 	s->slot_size = DEFAULT_SLOT_SIZE;
@@ -234,7 +236,9 @@ skynet_handle_init(void) {
 	memset(s->slot, 0, s->slot_size * sizeof(struct skynet_context *));		//写错了 handle_slot ，之后改成了skynet_context
 
 	rwlock_init(&s->lock);
-	s->handle_index = 0;
+	// reserve 0 for system
+	s->harbor = (uint32_t) (harbor & 0xff) << HANDLE_REMOTE_SHIFT;
+	s->handle_index = 1;
 	s->name_cap = 2;
 	s->name_count = 0;
 	s->name = malloc(s->name_cap * sizeof(struct handle_name));
