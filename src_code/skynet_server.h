@@ -9,7 +9,7 @@ struct skynet_message;
  name: 模块名
  parm: 模块的 init 接口使用的参数之一
 */
-struct skynet_context * skynet_context_new(const char * name, char * parm);
+struct skynet_context * skynet_context_new(const char * name, const char * parm);
 // 增加 ctx 的引用计数
 void skynet_context_grab(struct skynet_context *);
 // ctx 释放
