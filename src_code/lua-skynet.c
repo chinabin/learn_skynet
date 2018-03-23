@@ -38,7 +38,7 @@ _callback(lua_State *L) {
 	luaL_checktype(L,1,LUA_TFUNCTION);	//确保那些调用形式为 skynet.callback 的函数都是传入一个函数作为参数
 	lua_settop(L,1);
 	lua_rawsetp(L, LUA_REGISTRYINDEX, _cb);
-	//QUESTION: 获取主线程的状态，没懂
+	// 获取主协程的 lua_State 。主协程就是在那个协程中产生其它协程的协程。
 	lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
 	lua_State *gL = lua_tothread(L,-1);
 

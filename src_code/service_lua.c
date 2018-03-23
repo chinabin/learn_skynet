@@ -24,13 +24,14 @@ _load(lua_State *L, char ** filename) {
 // snlua 服务的 init 接口中关于回调函数的设置放在 XX.lua 文件中。
 int
 snlua_init(lua_State *L, struct skynet_context *ctx, const char * args) {
-	lua_gc(L, LUA_GCSTOP, 0);	// QUESTION: 这里以及后面的 lua_gc 作用
+	// 暂时关闭 GC 是为了加快速度
+	lua_gc(L, LUA_GCSTOP, 0);	// 停止GC 
 	luaL_openlibs(L);		//打开 Lua 标准库
 	//下面两句等价于：找到 LUA_REGISTRYINDEX 索引所在的表t，使得t["skynet_context"] = ctx
 	//将 ctx 参数最终传递给 luaopen_skynet 函数
 	lua_pushlightuserdata(L, ctx);
 	lua_setfield(L, LUA_REGISTRYINDEX, "skynet_context");
-	lua_gc(L, LUA_GCRESTART, 0);
+	lua_gc(L, LUA_GCRESTART, 0);	//重启GC 
 
 	char tmp[strlen(args)+1];
 	char *parm = tmp;
