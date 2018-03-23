@@ -308,6 +308,10 @@ mread_poll(struct mread_pool * self , int timeout) {
 			return -1;
 		}
 		if (fd == self->listen_fd) { 	// 表示有新的连接
+			/*
+			 这里有个问题：当用户连接进来但是没有发送数据， mread_poll 会返回 -1
+			 所以在 gate/main.c 的 _cb 函数中调用的时候 _report open 不能得到立即响应
+			*/
 			struct sockaddr_in remote_addr;
 			socklen_t len = sizeof(struct sockaddr_in);
 			int client_fd = accept(self->listen_fd , (struct sockaddr *)&remote_addr ,  &len);

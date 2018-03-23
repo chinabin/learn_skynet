@@ -15,7 +15,7 @@
 struct connection {
 	char * agent;			// 转寄地址。接到每个连接的数据都会默认发往 watchdog ，如果设置了转寄地址则发往转寄地址
 	int connection_id;		// skynet 内部的 socket 标号
-	int uid;
+	int uid;				// id 标识，用户接入的时候会设置为一个大于0的值，断开的时候会重置为0.
 };
 
 struct gate {
@@ -104,7 +104,7 @@ _ctrl(struct skynet_context * ctx, struct gate * g, const void * msg, int sz) {
 	skynet_error(ctx, "[gate] Unkown command : %s", command);
 }
 
-// 从 ctx 发送消息到 watchdog
+// 将连接和断开的消息发送到 watchdog
 static void
 _report(struct skynet_context * ctx, const char * data, ...) {
 	va_list ap;

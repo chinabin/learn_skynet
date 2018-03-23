@@ -14,7 +14,7 @@ function command:open(parm)
 	local fd,addr = string.match(parm,"(%d+) ([^%s]+)")
 	fd = tonumber(fd)
 	print("[watchdog] open",self,fd,addr)
-	local agent = skynet.command("LAUNCH","snlua agent.lua ".. self)
+	local agent = skynet.command("LAUNCH","snlua agent.lua ".. self)	-- 这里启动一个 snlua 服务，返回服务地址。并且因为 open 命令处理的是用户连接，所以经常在网上看到的说每个用户接入会启动一个 agent 。
 	if agent then
 		skynet.send(".gate","forward ".. self .. " " .. agent)
 	end

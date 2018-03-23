@@ -61,7 +61,7 @@ _command(lua_State *L) {
 		result = skynet_command(context, cmd, NULL);
 	}
 	if (result) {
-		lua_pushstring(L, result);
+		lua_pushstring(L, result);		// skynet.command 调用的返回结果
 		return 1;
 	}
 	return 0;
