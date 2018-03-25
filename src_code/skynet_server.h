@@ -1,6 +1,8 @@
 #ifndef SKYNET_SERVER_H
 #define SKYNET_SERVER_H
 
+#include <stdint.h>
+
 struct skynet_context;
 struct skynet_message;
 
