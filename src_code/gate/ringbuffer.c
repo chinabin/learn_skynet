@@ -185,6 +185,7 @@ ringbuffer_free(struct ringbuffer * rb, struct ringbuffer_block * blk) {
 
 int
 ringbuffer_data(struct ringbuffer * rb, struct ringbuffer_block * blk, int size, int skip, void **ptr) {
+	//单个blk数据长度
 	int length = blk->length - sizeof(struct ringbuffer_block) - blk->offset;
 	for (;;) {
 		if (length > skip) {

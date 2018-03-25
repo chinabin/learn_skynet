@@ -2,8 +2,8 @@
 #include "skynet_module.h"
 #include "skynet_handle.h"
 #include "skynet_mq.h"
-#include "skynet_blackhole.h"
 #include "skynet_timer.h"
+#include "skynet_harbor.h"
 #include "skynet.h"
 
 #include <string.h>
@@ -15,19 +15,24 @@
 #define DEFAULT_MESSAGE_QUEUE 16
 
 struct skynet_context {
-	void * instance;
-	struct skynet_module * mod;
-	int handle;
+	void * instance;				// 实例指针，通过调用创建实例函数返回
+	struct skynet_module * mod;		// 实例对应的模块
+	uint32_t handle;				// 服务编号
+	/*
+	 calling 是一种标识，为 1 表示触发，为 0 表示没有触发
+	 当前的作用是，因为 init 接口中可能会给自己发消息，而消息的响应是需要调用回调函数，而回调函数的设置是在 init 接口中
+	 所以在这里设置一个标识，表示是否准备好。后面的消息分发代码中会查询这个设置，如果为 1 则将消息推送到消息队列，否则直接调用回调函数处理。
+	*/
 	int calling;
-	int ref;
-	char handle_name[10];
-	char result[32];
-	void * cb_ud;			//回调函数的第二个参数
-	skynet_cb cb;			//回调函数指针，定义在skynet.h
+	int ref;						// 引用计数
+	char handle_name[10];			// handle 的十六进制字符串形式
+	char result[32];				// 不同的命令会设置不同的返回值
+	void * cb_ud;					// 回调函数的第二个参数
+	skynet_cb cb;					// 回调函数指针，定义在 skynet.h : typedef void (*skynet_cb)(struct skynet_context * context, void *ud, const char * uid , const void * msg, size_t sz_session);
 	struct message_queue *queue;
 };
 
-//数字转为16进制字符串
+// id 转为16进制字符串
 static void
 _id_to_hex(char * str, int id) {
 	int i;
@@ -38,9 +43,13 @@ _id_to_hex(char * str, int id) {
 	str[8] = '\0';
 }
 
-//传入模块名和参数，创建新的ctx并返回
+/*
+ 创建新的 ctx 并返回
+ name: 模块名
+ parm: 模块的 init 接口使用的参数之一
+*/
 struct skynet_context * 
-skynet_context_new(const char * name, char *parm) {
+skynet_context_new(const char * name, const char *parm) {
 	struct skynet_module * mod = skynet_module_query(name);
 
 	if (mod == NULL)
@@ -52,16 +61,22 @@ skynet_context_new(const char * name, char *parm) {
 	struct skynet_context * ctx = malloc(sizeof(*ctx));
 	ctx->mod = mod;
 	ctx->instance = inst;
-	ctx->ref = 2;	//应该为1，但是因为后面调用了skynet_context_release会将引用计数减1，所以设置为2。//QUESTION: 为什么要调用skynet_context_release
+	/*
+	 QUESTION: 为什么不直接设置为 1 ，而是先设置为 2 然后调用 skynet_context_release 
+	 猜想是为了代码规范与行为统一：首先，使用 ctx 应该增加引用计数。其次，使用完 ctx 要调用 skynet_context_release 释放。
+	 首先，创建 ctx 并给其成员赋值，属于引用，所以引用计数加 1 ，当前引用计数值为 1
+	 因为使用完成必须调用 skynet_context_release 释放，但是不能刚刚创建好就直接销毁，所以设置引用计数为 2
+	*/
+	ctx->ref = 2;
 	ctx->cb = NULL;
 	ctx->cb_ud = NULL;
 	char * uid = ctx->handle_name;
 	uid[0] = ':';
-	_id_to_hex(uid+1, ctx->handle);	//这里写错了，应该放在ctx->handle赋值语句后面，后面的版本修复了
+	_id_to_hex(uid+1, ctx->handle);	// 应该放在后面一句 ctx->handle 赋值语句后面，后面的版本修复了
 
-	ctx->handle = skynet_handle_register(ctx);
+	ctx->handle = skynet_handle_register(ctx); // 服务注册，获得服务编号
 	ctx->queue = skynet_mq_create(DEFAULT_MESSAGE_QUEUE);
-	ctx->calling = 1;	//QUESTION: calling应该是标识ctx当前是否在被使用（1为使用，0为没使用）
+	ctx->calling = 1;
 	// init function maybe use ctx->handle, so it must init at last
 
 	int r = skynet_module_instance_init(mod, inst, ctx, parm);
@@ -76,13 +91,13 @@ skynet_context_new(const char * name, char *parm) {
 	}
 }
 
-//ctx->ref加1并返回更新后的值
+// 增加 ctx 的引用计数
 void 
 skynet_context_grab(struct skynet_context *ctx) {
 	__sync_add_and_fetch(&ctx->ref,1);
 }
 
-//删除实例、消息队列，释放内存
+// 销毁服务
 static void 
 _delete_context(struct skynet_context *ctx) {
 	skynet_module_instance_release(ctx->mod, ctx->instance);
@@ -90,7 +105,8 @@ _delete_context(struct skynet_context *ctx) {
 	free(ctx);
 }
 
-//ctx的引用计数减1，如果ctx的引用计数为0则删除ctx
+// ctx 释放
+// 引用计数 为 0 则销毁
 struct skynet_context * 
 skynet_context_release(struct skynet_context *ctx) {
 	if (__sync_sub_and_fetch(&ctx->ref,1) == 0) {
@@ -100,73 +116,62 @@ skynet_context_release(struct skynet_context *ctx) {
 	return ctx;
 }
 
-//将消息丢弃到黑洞
-static void
-_drop_message(int source, const char * addr , void * data, size_t sz) {
-	struct blackhole * b = malloc(sizeof(*b));
-	b->source = source;
-	b->destination = strdup(addr);
-	b->data = data;
-	b->sz = sz;
-
-	//QUESTION: 什么是黑洞？
-	int des = skynet_handle_findname(BLACKHOLE);
-	if (des<0)
-		return;
-
-	struct skynet_message msg;
-	msg.source = source;
-	msg.destination = des;
-	msg.data = b;
-	msg.sz = sizeof(*b);
-	skynet_mq_push(&msg);
-}
-
-//调用ctx的回调函数
+// 调用ctx的回调函数
 static void
 _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
-	//source等于-1表示定时器时间到了
-	if (msg->source == -1) {
+	// source 等于 -1 表示源于系统，见 skynet_timeout
+	if (msg->source == SKYNET_SYSTEM_TIMER) {
 		ctx->cb(ctx, ctx->cb_ud, NULL, msg->data, msg->sz);
 	} else {
 		char tmp[10];
 		tmp[0] = ':';
 		_id_to_hex(tmp+1, msg->source);
-		ctx->cb(ctx, ctx->cb_ud, tmp, msg->data, msg->sz);
+		if (skynet_harbor_message_isremote(msg->source)) {
+			void * data = skynet_harbor_message_open(msg);
+			ctx->cb(ctx, ctx->cb_ud, tmp, data, msg->sz);
+			skynet_harbor_message_close(msg);
+		} else {
+			ctx->cb(ctx, ctx->cb_ud, tmp, msg->data, msg->sz);
+		}
 
 		free(msg->data);
 	}
 }
 
-//从队列Q中取出一个消息，如果目的handle的ctx正在使用，则将该消息添加到ctx的消息队列
-//否则则将ctx剩余的消息全部处理完
+/*
+ 从全局消息队列中取出消息分发，返回 1 表示阻塞，当前无消息
+ 这个时候的消息队列比较简单，所有消息都是放进全局消息队列中，服务的私有消息队列只是
+ 存放当服务被占用导致无法处理消息的时候的消息
+*/
 int
 skynet_context_message_dispatch(void) {
 	struct skynet_message msg;
-	int handle = skynet_mq_pop(&msg);
-	if (handle < 0) {
+	/*
+	 从全局消息队列中取出一个消息
+	*/
+	uint32_t handle = skynet_mq_pop(&msg);	// handle 为消息的目的地的服务编号
+	if (handle == 0) {
 		return 1;
 	}
 	struct skynet_context * ctx = skynet_handle_grab(handle);
-	if (ctx == NULL) {
-		char tmp[10];
-		tmp[0] = ':';
-		_id_to_hex(tmp+1, msg.destination);
-		_drop_message(msg.source, tmp, msg.data, msg.sz);
+	if (ctx == NULL) {	// 服务已销毁则丢弃消息到黑洞
+		free(msg.data);
+		skynet_error(NULL, "Drop message from %u to %u , size = %d",msg.source, msg.destination, (int)msg.sz);
 		return 0;
 	}
-	if (__sync_lock_test_and_set(&ctx->calling, 1)) {
+	if (__sync_lock_test_and_set(&ctx->calling, 1)) {	// 服务还没有设置好，无法处理此消息，所以先放入消息队列
 		// When calling, push to context's message queue
 		skynet_mq_enter(ctx->queue, &msg);
-	} else {
-		if (ctx->cb == NULL) {
-			char tmp[10];
-			tmp[0] = ':';
-			_id_to_hex(tmp+1, msg.destination);
-			_drop_message(msg.source, tmp, msg.data, msg.sz);
+	} else {	// 处理此消息
+		if (ctx->cb == NULL) { // 回调函数为空则丢弃消息到黑洞
+			if (skynet_harbor_message_isremote(msg.source)) {
+				skynet_harbor_message_close(&msg);
+			}
+			free(msg.data);
+			skynet_error(NULL, "Drop message from %u to %u without callback , size = %d",msg.source, msg.destination, (int)msg.sz);
 		} else {
-			_dispatch_message(ctx, &msg);
-			while(skynet_mq_leave(ctx->queue,&msg) >=0) {
+			_dispatch_message(ctx, &msg);	// 处理消息
+			while(skynet_mq_leave(ctx->queue,&msg)) {	// 处理 ctx 私有消息队列剩余消息
 				_dispatch_message(ctx,&msg);
 			}
 		}
@@ -180,7 +185,7 @@ skynet_context_message_dispatch(void) {
 
 const char * 
 skynet_command(struct skynet_context * context, const char * cmd , const char * parm) {
-	if (strcmp(cmd,"TIMEOUT") == 0) {
+	if (strcmp(cmd,"TIMEOUT") == 0) {	// 添加一个定时器消息，自己给自己发消息
 		//time:session
 		char * session_ptr = NULL;
 		//strtol会将parm按照10指定的基数转换然后返回。遇到的第一个非法值会将地址赋值给第二个参数
@@ -192,26 +197,30 @@ skynet_command(struct skynet_context * context, const char * cmd , const char * 
 		return NULL;
 	}
 
-	if (strcmp(cmd,"NOW") == 0) {
+	if (strcmp(cmd,"NOW") == 0) {	// 返回系统开机到现在的时间，单位是 10 毫秒
 		uint32_t ti = skynet_gettime();
 		sprintf(context->result,"%u",ti);
 		return context->result;
 	}
 
-	if (strcmp(cmd,"REG") == 0) {
+	if (strcmp(cmd,"REG") == 0) {	// 为服务注册名字， parm 为空则返回服务编号的十六进制字符串
 		if (parm == NULL || parm[0] == '\0') {
 			return context->handle_name;
+		} else if (parm[0] == '.') {
+			return skynet_handle_namehandle(context->handle, parm + 1);
 		} else {
-			return skynet_handle_namehandle(context->handle, parm);
+			assert(context->handle!=0);
+			skynet_harbor_register(parm, context->handle);
+			return NULL;
 		}
 	}
 
-	if (strcmp(cmd,"EXIT") == 0) {
+	if (strcmp(cmd,"EXIT") == 0) {	// 服务销毁
 		skynet_handle_retire(context->handle);
 		return NULL;
 	}
 
-	if (strcmp(cmd,"LAUNCH") == 0) {
+	if (strcmp(cmd,"LAUNCH") == 0) {	// 加载新的服务
 		size_t sz = strlen(parm);
 		char tmp[sz+1];
 		strcpy(tmp,parm);
@@ -231,41 +240,58 @@ skynet_command(struct skynet_context * context, const char * cmd , const char * 
 	return NULL;
 }
 
+/*
+ 服务 context->handle 给服务 addr 发消息
+ addr: 如果以':'开头则后面跟的是 handle ，如果以'.'开头则后面跟的是 handle name
+*/
 void 
 skynet_send(struct skynet_context * context, const char * addr , void * msg, size_t sz) {
-	int des = -1;
-	//':'后面跟的是handle，'.'后面跟的是handle name
+	uint32_t des = 0;
 	if (addr[0] == ':') {
 		des = strtol(addr+1, NULL, 16);
 	} else if (addr[0] == '.') {
 		des = skynet_handle_findname(addr + 1);
-		if (des < 0) {
-			_drop_message(context->handle, addr, (void *)msg, sz);
+		if (des == 0) {
+			free(msg);
+			skynet_error(context, "Drop message to %s, size = %d", addr, (int)sz);
 			return;
 		}
+	} else {
+		struct skynet_message smsg;
+		smsg.source = context->handle;
+		smsg.destination = 0;
+		smsg.data = msg;
+		smsg.sz = sz;
+		skynet_harbor_send(addr, &smsg);
+		return;
 	}
 
-	assert(des >= 0);
+	assert(des > 0);
 	struct skynet_message smsg;
 	smsg.source = context->handle;
 	smsg.destination = des;
 	smsg.data = msg;
 	smsg.sz = sz;
-	skynet_mq_push(&smsg);
+	if (skynet_harbor_message_isremote(des)) {
+		skynet_harbor_send(NULL, &smsg);
+	} else {
+		skynet_mq_push(&smsg);
+	}
 }
 
-//返回ctx的handle
-int 
+// 返回 ctx 的 handle
+uint32_t 
 skynet_context_handle(struct skynet_context *ctx) {
 	return ctx->handle;
 }
 
-//设置ctx的handle
+// 设置 ctx 的 handle
 void 
-skynet_context_init(struct skynet_context *ctx, int handle) {
+skynet_context_init(struct skynet_context *ctx, uint32_t handle) {
 	ctx->handle = handle;
 }
 
+// 设置 ctx 的 回调函数接口以及传入回调函数的第二个参数
 void 
 skynet_callback(struct skynet_context * context, void *ud, skynet_cb cb) {
 	assert(context->cb == NULL);

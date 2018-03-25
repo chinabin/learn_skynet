@@ -7,28 +7,41 @@ typedef void * (*skynet_dl_create)(void);
 typedef int (*skynet_dl_init)(void * inst, struct skynet_context *, const char * parm);
 typedef void (*skynet_dl_release)(void * inst);
 
-//skynet_module是skynet中对SO模块的抽象
+// skynet 中对so库的抽象
 struct skynet_module {
-	const char * name;
-	void * module;
-	skynet_dl_create create;
-	skynet_dl_init init;
+	const char * name;			// so库名
+	void * module;				// 动态链接库句柄
+	skynet_dl_create create;	// 创建函数。返回实例指针，之后作为 init 函数的参数传入
+	skynet_dl_init init;		// 返回 0 为成功
 	skynet_dl_release release;
 };
 
-//将skynet_module插入modules，暂时没有使用
+/*
+ 将 skynet_module 插入 modules ，暂时没有使用
+*/
 void skynet_module_insert(struct skynet_module *mod);
-//传入模块名，返回对应的skynet_module。
-//如果此模块没有预先创建则创建并添加到modules中，如果此模块对应的SO文件不在指定的路径则返回NULL。
+/*
+ 将 name 对应的so库加载进 modules ，如果已存在，则返回
+*/
 struct skynet_module * skynet_module_query(const char * name);
-//调用skynet_module的create函数创建实例
+
+/*
+ 调用 create 接口，返回实例指针，后面会传入 init 函数和 release 函数
+*/
 void * skynet_module_instance_create(struct skynet_module *);
-//调用skynet_module的init函数初始化实例，返回0表示成功
+/*
+ 1. init 接口实现中需要设置好回调接口，之后处理消息的时候需要调用
+ 2. 返回0表示成功
+*/
 int skynet_module_instance_init(struct skynet_module *, void * inst, struct skynet_context *ctx, const char * parm);
-//调用skynet_module的release函数释放实例
+/*
+ 清理释放
+*/
 void skynet_module_instance_release(struct skynet_module *, void *inst);
 
-//传入默认路径来初始化modules
+/*
+ 传入默认so库的路径来初始化 modules 结构体
+*/
 void skynet_module_init(const char *path);
 
 #endif
