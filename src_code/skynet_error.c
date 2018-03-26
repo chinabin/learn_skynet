@@ -2,6 +2,7 @@
 #include "skynet_handle.h"
 #include "skynet_mq.h"
 #include "skynet_server.h"
+#include "skynet_system.h"
 
 #include <stdarg.h>
 #include <stdio.h>

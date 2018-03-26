@@ -1,0 +1,9 @@
+准备 zeromq-2.2 源代码：
+1. 在 learn_skynet\material\zeromq-2.2.0.tar.gz
+2. 解压 tar -xzf zeromq-2.2.0.tar.gz
+3. 运行 ./configure
+   如果过程中会出现cannot link with -luuid, install uuid-dev  c++错误，执行如下命令：
+   sudo apt-get install g++ build-essential gawk zlib1g-dev uuid-dev
+4. make
+5. sudo make install
+6. 到 skynet 的源代码目录运行 make
