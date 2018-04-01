@@ -18,6 +18,10 @@ calc_hash(const char *name) {
 	return h;
 }
 
+/*
+ key - value 是键值对，通过 key 对应 value ，这是对外
+ 对内是通过 hash 来高效查找对应的 value
+*/
 struct keyvalue {
 	struct keyvalue * next;
 	uint32_t hash;
@@ -26,6 +30,10 @@ struct keyvalue {
 	char * value;
 };
 
+/*
+ skynet 的 key 其实是一个主机的一个编号，0 - 254 ， value 其实是主机的地址。
+ 每个 key 就是 slave 数组的下标
+*/
 struct hashmap {
 	struct keyvalue *node[HASH_SIZE];
 	void * zmq;
@@ -40,6 +48,9 @@ _hash_new(void *zmq) {
 	return hash;
 }
 
+/*
+ 存在不同的 key 计算出相同的 hash
+*/
 static struct keyvalue *
 _hash_search(struct hashmap * hash, const char * key) {
 	uint32_t h = calc_hash(key);
@@ -53,6 +64,14 @@ _hash_search(struct hashmap * hash, const char * key) {
 	return NULL;
 }
 
+/*
+ 插入键值对
+ 对于 next 指针的解释：
+ 	最开始的时候 hashmap 中的内容都是 0 ，所以 key1 和 value1 插入的时候， node->next 是指向 NULL
+ 	运行到函数的最后一句才会将 hash->node[h & (HASH_SIZE-1)] 赋值。
+ 	当插入 key2 和 value2 并且 key2 和 key1 计算出来的 hash 值相同，这时候新的 node->next 赋值
+ 	指向之前的 key1 对应的 node ，然后在函数的最后一句更新 hash->node[h & (HASH_SIZE-1)] 。
+*/
 static void
 _hash_insert(struct hashmap * hash, const char * key, const char *value) {
 	uint32_t h = calc_hash(key);
@@ -192,6 +211,9 @@ update(void * responder, struct hashmap *map, zmq_msg_t * msg) {
 			key[i] = '\0';
 			int slave = strtol(key, NULL, 10);
 			if (sz-i == 1) {
+				/*
+				 传过来的命令如果是 key = ，则表示擦除 key 对应的 value
+				*/
 				if (slave > 0 && slave <= MAX_SLAVE) {
 					_hash_bind(map, slave, NULL);
 				}
@@ -236,6 +258,18 @@ main (int argc, char * argv[]) {
 
 	struct hashmap *map = _hash_new(context);
 
+	/*
+	- 你需要创建和传递 zmq_msg_t 对象，而不是一组数据块；
+	- 读取消息时，先用 zmq_msg_init() 初始化一个空消息，再将其传递
+		给 zmq_recv() 函数；
+	- 获取消息内容时需使用 zmq_msg_data() 函数；若想知道消息的长
+		度，可以使用 zmq_msg_size() 函数；
+	- 写入消息时，先用 zmq_msg_init_size() 来创建消息（同时也已初
+		始化了一块内存区域），然后用 memcpy() 函数将信息拷贝到该
+		对象中，最后传给 zmq_send() 函数；
+	- 释放消息（并不是销毁）时，使用 zmq_msg_close() 函数，它会将
+		对消息对象的引用删除，最终由 ZMQ 将消息销毁；
+	*/
 	for (;;) {
 		zmq_msg_t request;
 		zmq_msg_init (&request);
