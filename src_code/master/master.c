@@ -27,8 +27,12 @@ struct keyvalue {
 };
 
 struct hashmap {
-	struct keyvalue *node[HASH_SIZE];
+	struct keyvalue *node[HASH_SIZE];		// 键值对
 	void * zmq;
+	/*
+	 客户端 socket ，对于 master 来说，也就是各个 skynet 的 socket
+	 下标就是 harbor id
+	*/
 	void * slave[MAX_SLAVE];
 };
 
@@ -105,6 +109,7 @@ _hash_bind(struct hashmap * hash, int slave, const char *addr) {
 	return 0;
 }
 
+// 向所有的 skynet 节点广播 msg
 static void
 broadcast(struct hashmap * hash, zmq_msg_t * msg) {
 	int i;
@@ -166,6 +171,11 @@ erase(void * responder, struct hashmap *map, const char *key) {
 	zmq_msg_close (&reply);
 }
 
+/*
+ 查询某个 key 是否存在
+ 不存在则给 responder 发送消息，消息大小是 0
+ 存在则给 responder 发送消息，消息内容是 key 对应的 value
+*/
 static void
 query(void * responder, struct hashmap *map, const char * key) {
 	struct keyvalue * node = _hash_search(map, key);
@@ -180,6 +190,10 @@ query(void * responder, struct hashmap *map, const char * key) {
 	zmq_msg_close (&reply);
 }
 
+/*
+ "%d=%s"	->	harbor=address			register_harbor
+ "%s=%X"	->	name=handle id 			_remote_register_name
+*/
 static void
 update(void * responder, struct hashmap *map, zmq_msg_t * msg) {
 	size_t sz = zmq_msg_size (msg);
@@ -191,13 +205,13 @@ update(void * responder, struct hashmap *map, zmq_msg_t * msg) {
 			memcpy(key, command, i);
 			key[i] = '\0';
 			int slave = strtol(key, NULL, 10);
-			if (sz-i == 1) {
+			if (sz-i == 1) {	// 清除 key 对应的 value
 				if (slave > 0 && slave <= MAX_SLAVE) {
 					_hash_bind(map, slave, NULL);
 				}
 				erase(responder, map,key);
 				broadcast(map, msg);
-			} else {
+			} else {			// 更新 key 对应的 value
 				char value[sz-i];
 				memcpy(value, command+i+1, sz-i-1);
 				value[sz-i-1] = '\0';
@@ -211,6 +225,8 @@ update(void * responder, struct hashmap *map, zmq_msg_t * msg) {
 			return;
 		}
 	}
+
+	// 查询
 	char key[sz+1];
 	memcpy(key, command, sz);
 	key[sz] = '\0';
@@ -225,7 +241,7 @@ main (int argc, char * argv[]) {
 	}
 
 	void *context = zmq_init (1);
-	void *responder = zmq_socket (context, ZMQ_REP);
+	void *responder = zmq_socket (context, ZMQ_REP);		// 设置服务端为 请求-应答模式 
 
 	int r = zmq_bind(responder, default_port);
 	if (r < 0) {

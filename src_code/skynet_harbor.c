@@ -39,12 +39,18 @@ struct remote {
 };
 
 struct harbor {
-	void * zmq_context;
-	void * zmq_master_request;
-	void * zmq_local;
+	void * zmq_context;					// zmq 上下文
+	void * zmq_master_request;			// 连接 master 的 socket
+	void * zmq_local;					// 与其它的 harbor 通信的 socket
+	/*
+	 zmq_queue_notice 是线程内通信的 socket
+	 这个通信的流程类似一种提醒，例如 skynet_harbor_register 注册全局服务名，先准备好消息，
+	 之后调用 send_notice 使得 skynet_harbor_dispatch_thread 的 _remote_send 被调用，然后
+	 从消息队列中取出注册全局服务名的消息。
+	*/
 	void * zmq_queue_notice;
-	int notice_event;
-	struct hashmap *map;
+	int notice_event;					// 标识 notice 是否处理
+	struct hashmap *map;				// 保存名字和 id 键值对
 	struct remote remote[REMOTE_MAX];
 	struct message_queue *queue;
 	int harbor;
@@ -244,6 +250,7 @@ _register_name(const char *name, uint32_t addr) {
 	}
 }
 
+// 更新保存的 harbor id 以及地址信息
 static void
 _remote_harbor_update(int harbor_id, const char * addr) {
 	struct remote * r = &Z->remote[harbor_id-1];
@@ -257,7 +264,7 @@ _remote_harbor_update(int harbor_id, const char * addr) {
 	if (socket) {
 		for (;;) {
 			void *old_socket = r->socket;
-			if (__sync_bool_compare_and_swap(&r->socket, old_socket, socket)) {
+			if (__sync_bool_compare_and_swap(&r->socket, old_socket, socket)) {		// QUESTION : 为什么要用这样的原子操作？
 				if (old_socket) {
 					zmq_close(old_socket);
 				}
@@ -396,6 +403,7 @@ skynet_harbor_message_isremote(uint32_t handle) {
 	return !(harbor_id == 0 || harbor_id == Z->harbor);
 }
 
+// 注册全局服务名
 static void
 _remote_register_name(const char *name, uint32_t source) {
 	char tmp[strlen(name) + 20];
@@ -411,6 +419,7 @@ _remote_register_name(const char *name, uint32_t source) {
 	zmq_msg_close(&msg);
 }
 
+// 查询某个服务名
 static void
 _remote_query_name(const char *name) {
 	int sz = strlen(name);
@@ -437,6 +446,8 @@ static void
 free_message (void *data, void *hint) {
 	free(data);
 }
+
+// 向 socket 发送 msg
 static void
 remote_socket_send(void * socket, struct skynet_message *msg) {
 	struct remote_header rh;
@@ -459,17 +470,17 @@ _remote_send() {
 	struct skynet_message msg;
 	while (skynet_mq_leave(Z->queue,&msg)) {
 _goback:
-		if (msg.destination == SKYNET_SYSTEM_NAME) {
+		if (msg.destination == SKYNET_SYSTEM_NAME) {	// skynet_harbor_register
 			// register name
 			const char * name = msg.data;
-			if (msg.source) {
-				_remote_register_name(name, msg.source);
+			if (msg.source) {	// 和 master 通信
+				_remote_register_name(name, msg.source);	// 注册全局服务名
 			} else {
-				_remote_query_name(name);
+				_remote_query_name(name);					// 查询某个名字
 			}
 
 			free(msg.data);
-		} else {
+		} else {	// 和 harbor 通信
 			int harbor_id = (msg.destination >> HANDLE_REMOTE_SHIFT);
 			assert(harbor_id > 0);
 			struct remote * r = &Z->remote[harbor_id-1];
@@ -482,7 +493,7 @@ _goback:
 					skynet_mq_enter(r->queue, &msg);
 				}
 			} else {
-				remote_socket_send(r->socket, &msg);
+				remote_socket_send(r->socket, &msg);		// 给其它的 harbor 发送消息
 			}
 		}
 	}
@@ -503,8 +514,8 @@ skynet_harbor_dispatch_thread(void *ud) {
 	items[1].events = ZMQ_POLLIN;
 
 	for (;;) {
-		zmq_poll(items,2,-1);
-		if (items[0].revents) {
+		zmq_poll(items,2,-1);			// -1 表示超时时间是无限
+		if (items[0].revents) {			// master 消息
 			zmq_msg_t msg;
 			zmq_msg_init(&msg);
 			int rc = zmq_recv(Z->zmq_queue_notice,&msg,0);
@@ -512,14 +523,18 @@ skynet_harbor_dispatch_thread(void *ud) {
 			zmq_msg_close(&msg);
 			_remote_send();
 		}
-		if (items[1].revents) {
+		if (items[1].revents) {			// harbor 消息
 			_remote_recv();
 		}
 	}
 }
 
+/*
+ 向 master 注册 harbor id
+*/
 static void
 register_harbor(void *request, const char *local, int harbor) {
+	// 测试 harbor id 是否被注册
 	char tmp[1024];
 	sprintf(tmp,"%d",harbor);
 	size_t sz = strlen(tmp);
@@ -530,6 +545,7 @@ register_harbor(void *request, const char *local, int harbor) {
 	zmq_send (request, &req, 0);
 	zmq_msg_close (&req);
 
+	// 测试结果
 	zmq_msg_t reply;
 	zmq_msg_init (&reply);
 	int rc = zmq_recv(request, &reply, 0);
@@ -546,6 +562,8 @@ register_harbor(void *request, const char *local, int harbor) {
 	}
 	zmq_msg_close (&reply);
 
+	// 正式请求注册 harbor id 
+	// 还是可能失败的，因为在测试结果返回之后，正式请求注册之前，是不可控。
 	sprintf(tmp,"%d=%s",harbor,local);
 	sz = strlen(tmp);
 	zmq_msg_init_size (&req , sz);
@@ -553,6 +571,7 @@ register_harbor(void *request, const char *local, int harbor) {
 	zmq_send (request, &req, 0);
 	zmq_msg_close (&req);
 
+	// 注册结果
 	zmq_msg_init (&reply);
 	rc = zmq_recv (request, &reply, 0);
 	_report_zmq_error(rc);
@@ -571,6 +590,11 @@ register_harbor(void *request, const char *local, int harbor) {
 	zmq_msg_close (&reply);
 }
 
+/*
+ master : master 的地址
+ local : 此 skynet 的地址
+ harbor : harbor id
+*/
 void 
 skynet_harbor_init(const char * master, const char *local, int harbor) {
 	if (harbor <=0 || harbor>255 || strlen(local) > 512) {
