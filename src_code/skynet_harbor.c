@@ -21,7 +21,7 @@ struct keyvalue {
 	uint32_t hash;
 	char * key;
 	uint32_t value;
-	struct message_queue * queue;
+	struct message_queue * queue;		// 发给某个具有名字的服务，但是这个名字对于本地 skynet 是不认识的，消息就放在这。
 };
 
 struct hashmap {
@@ -35,7 +35,7 @@ struct remote_header {
 
 struct remote {
 	void *socket;
-	struct message_queue *queue;
+	struct message_queue *queue;		// 发给某个 harbor ，只是这个 harbor 还没起来，则先把消息存在这里。
 };
 
 struct harbor {
@@ -50,10 +50,10 @@ struct harbor {
 	*/
 	void * zmq_queue_notice;
 	int notice_event;					// 标识 notice 是否处理
-	struct hashmap *map;				// 保存名字和 id 键值对
-	struct remote remote[REMOTE_MAX];
-	struct message_queue *queue;
-	int harbor;
+	struct hashmap *map;				// 保存服务名字和 handle id 键值对
+	struct remote remote[REMOTE_MAX];	// 远端 harbor 存储
+	struct message_queue *queue;		// 发往远端的消息，并且已经与之建立了联系，则把消息放这。向远端查询名字。
+	int harbor;							// harbor id
 
 	int lock;
 };
@@ -134,6 +134,9 @@ _hash_insert(struct hashmap * hash, const char * key, uint32_t handle, struct me
 	hash->node[h & (HASH_SIZE-1)] = node;
 }
 
+/*
+ 给哨兵发消息：嘿，告诉大佬，有事做了
+*/
 static void
 send_notice() {
 	if (__sync_lock_test_and_set(&Z->notice_event,1)) {
@@ -153,9 +156,12 @@ send_notice() {
 	zmq_msg_close(&dummy);
 }
 
+/*
+ 给服务名为 name 的服务发消息
+*/
 void 
 skynet_harbor_send(const char *name, struct skynet_message * message) {
-	if (name == NULL) {
+	if (name == NULL) {		// 不知道服务名，只知道地址
 		int remote_id = message->destination >> HANDLE_REMOTE_SHIFT;
 		assert(remote_id > 0 && remote_id <= REMOTE_MAX);
 		--remote_id;
@@ -197,6 +203,7 @@ skynet_harbor_send(const char *name, struct skynet_message * message) {
 	}
 }
 
+// 请求查询某个服务名字
 //queue a register message (destination = 0)
 void 
 skynet_harbor_register(const char *name, uint32_t handle) {
@@ -209,6 +216,7 @@ skynet_harbor_register(const char *name, uint32_t handle) {
 	send_notice();
 }
 
+// 将 name addr 键值对插入 Z->map
 static void
 _register_name(const char *name, uint32_t addr) {
 	_lock();
@@ -282,6 +290,7 @@ _report_zmq_error(int rc) {
 	}
 }
 
+// harbor 更新或者全局服务名更新
 static void
 _name_update() {
 	zmq_msg_t content;
@@ -312,13 +321,13 @@ _name_update() {
 	memcpy(tmp,buffer+i+1,sz-i-1);
 	tmp[sz-i-1]='\0';
 
-	if (n>0 && n <= REMOTE_MAX) {
+	if (n>0 && n <= REMOTE_MAX) {		// %d=%s ，例如 3=145.23.65.78 ，前面是 harbor id ，后面是 ip 地址
 		_remote_harbor_update(n, tmp);
 	} else {
 		uint32_t source = strtoul(tmp,NULL,16);
 		if (source == 0) {
 			skynet_error(NULL, "Invalid master update [%s=%s]",(const char *)buffer,tmp);
-		} else {
+		} else {		// %s=%d，例如 "DATACENTER"=45123 ，前面是全局服务别名，后面是 handle id
 			_register_name((const char *)buffer, source);
 		}
 	}
@@ -326,6 +335,7 @@ _name_update() {
 	zmq_msg_close(&content);
 }
 
+// 查询某个 harbor id 对应的地址并更新
 static void
 remote_query_harbor(int harbor_id) {
 	char tmp[32];

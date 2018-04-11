@@ -1,6 +1,8 @@
 #ifndef _RWLOCK_H_
 #define _RWLOCK_H_
 
+// https://github.com/cloudwu/skynet/issues/319
+
 struct rwlock {
 	int write;
 	int read;
