@@ -1,5 +1,6 @@
 #include "skynet_timer.h"
 #include "skynet_mq.h"
+#include "skynet_server.h"
 
 #include <time.h>
 #include <assert.h>
@@ -14,6 +15,11 @@ typedef void (*timer_execute_func)(void *ud,void *arg);
 #define TIME_LEVEL (1 << TIME_LEVEL_SHIFT)	// 64
 #define TIME_NEAR_MASK (TIME_NEAR-1)
 #define TIME_LEVEL_MASK (TIME_LEVEL-1)
+
+struct timer_event {
+	uint32_t handle;
+	int session;
+};
 
 struct timer_node {
 	struct timer_node *next;
@@ -135,9 +141,15 @@ timer_execute(struct timer *T)
 		current=link_clear(&T->near[idx]);
 		
 		do {
-			struct timer_node *temp=current;
-			// 定时到期，将消息推到消息队列
-			skynet_mq_push((struct skynet_message *)(temp+1));
+			struct timer_event * event = (struct timer_event *)(current+1);
+			struct skynet_message message;
+			message.source = SKYNET_SYSTEM_TIMER;
+			message.data = NULL;
+			message.sz = (size_t) event->session;
+
+			skynet_context_push(event->handle, &message);
+			
+			struct timer_node * temp = current;
 			current=current->next;
 			free(temp);	
 		} while (current);
@@ -211,17 +223,22 @@ timer_create_timer()
  当 message 的 data 为空的时候， sz 表示两方通信的一个简单约定。
 */
 void 
-skynet_timeout(int handle, int time, int session) {
-	struct skynet_message message;
-	message.source = SKYNET_SYSTEM_TIMER;
-	message.destination = handle;
-	message.data = NULL;
-	message.sz = (size_t) session;
+skynet_timeout(uint32_t handle, int time, int session) {
 	// time 为0属于特例，不进入 timer 队列，而是直接进入消息队列
 	if (time == 0) {
-		skynet_mq_push(&message);
+		struct skynet_message message;
+		message.source = SKYNET_SYSTEM_TIMER;
+		message.data = NULL;
+		message.sz = (size_t) session;
+
+		if (skynet_context_push(handle, &message)) {
+			return;
+		}
 	} else {
-		timer_add(TI, &message, sizeof(message), time);
+		struct timer_event event;
+		event.handle = handle;
+		event.session = session;
+		timer_add(TI, &event, sizeof(event), time);
 	}
 }
 

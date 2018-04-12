@@ -16,7 +16,7 @@ struct skynet_message;
  	等到它起来（ master 会广播的）再传给它。
 	如果有，则满足两点要求，可以将消息发送。
 */
-void skynet_harbor_send(const char *name, struct skynet_message * message);
+void skynet_harbor_send(const char *name, uint32_t destination, struct skynet_message * message);
 
 /*
  请求 注册/查询 某个服务名字
