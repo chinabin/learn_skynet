@@ -19,9 +19,9 @@
 struct keyvalue {
 	struct keyvalue * next;
 	uint32_t hash;
-	char * key;
-	uint32_t value;
-	struct message_queue * queue;		// 发给某个具有名字的服务，但是这个名字对于本地 skynet 是不认识的，消息就放在这。
+	char * key;							// 全局服务名
+	uint32_t value;						// 全局服务名对应的 handle id
+	struct message_queue * queue;		// 发给某个具有名字的服务，但是这个名字对于本地 skynet 暂时还是不认识的，消息就放在这。
 };
 
 struct hashmap {
@@ -40,15 +40,15 @@ struct remote {
 
 struct harbor {
 	void * zmq_context;					// zmq 上下文
-	void * zmq_master_request;			// 连接 master 的 socket
-	void * zmq_local;					// 与其它的 harbor 通信的 socket
+	void * zmq_master_request;			// 连接 master 的 socket ，用来查询 skynet 地址或者查询全局服务 id。 REQ 	客户端
+	void * zmq_local;					// 连接 master 的 socket ，用来接收广播消息： skynet 节点地址更新，全局服务名及其地址更新
 	/*
 	 zmq_queue_notice 是线程内通信的 socket
 	 这个通信的流程类似一种提醒，例如 skynet_harbor_register 注册全局服务名，先准备好消息，
 	 之后调用 send_notice 使得 skynet_harbor_dispatch_thread 的 _remote_send 被调用，然后
 	 从消息队列中取出注册全局服务名的消息。
 	*/
-	void * zmq_queue_notice;
+	void * zmq_queue_notice;			// ZMQ_PULL 服务端
 	int notice_event;					// 标识 notice 是否处理
 	struct hashmap *map;				// 保存服务名字和 handle id 键值对
 	struct remote remote[REMOTE_MAX];	// 远端 harbor 存储
@@ -158,6 +158,14 @@ send_notice() {
 
 /*
  给服务名为 name 的服务发消息
+ 发送消息（目的地非本节点内）归根结底还是需要知道两点：
+ 1. 与目的节点建立连接，也就是有目的节点的 socket
+ 2. 知道目的地上的对应的服务的 handle id ，
+ 	在代码中，其实 handle id 中既有 harbor id ，又有 handle id ，
+ 	而 harbor id 可以对应到某个 Z->remote ，查看其 socket 是否有值。
+ 	如果没有，那么表示这个 skynet 节点还没有起来，那么就把消息放在其消息队列中
+ 	等到它起来（ master 会广播的）再传给它。
+	如果有，则满足两点要求，可以将消息发送。
 */
 void 
 skynet_harbor_send(const char *name, struct skynet_message * message) {
@@ -166,19 +174,20 @@ skynet_harbor_send(const char *name, struct skynet_message * message) {
 		assert(remote_id > 0 && remote_id <= REMOTE_MAX);
 		--remote_id;
 		struct remote * r = &Z->remote[remote_id];
-		if (r->socket) {
+		if (r->socket) {	// 已经与对应的 skynet 节点建立了连接
 			skynet_mq_enter(Z->queue, message);
 			send_notice();
-		} else {
+		} else {			// 还没有与对应的 skynet 节点建立连接
+			// QUESTION : 如何确定消息队列就已经建立了？
 			skynet_mq_enter(r->queue, message);
 		}
-	} else {
-		_lock();
+	} else {				// 明确发送给某个服务名对应的服务。
+		_lock();		// 加锁，免得查找的时候有插入
 		struct keyvalue * node = _hash_search(Z->map, name);
-		if (node) {
-			uint32_t dest = node->value;
+		if (node) {			// name 对应的服务信息之前已经知道了
+			uint32_t dest = node->value;		// 目的地上的对应的服务的 handle id
 			_unlock();
-			if (dest == 0) {
+			if (dest == 0) {	// 表示 name 对应的服务是未知的。例如 _hash_insert(Z->map, name, 0, queue); 就会导致这种情况
 				// push message to unknown name service queue
 				skynet_mq_enter(node->queue, message);
 			} else {
@@ -191,11 +200,11 @@ skynet_harbor_send(const char *name, struct skynet_message * message) {
 				skynet_mq_enter(Z->queue,message);
 				send_notice();
 			}
-		} else {
+		} else {			// name 对应的服务不知道
 			// never seen name before
 			struct message_queue * queue =  skynet_mq_create(DEFAULT_QUEUE_SIZE);
 			skynet_mq_enter(queue, message);
-			_hash_insert(Z->map, name, 0, queue);
+			_hash_insert(Z->map, name, 0, queue);	// 在 _register_name 会添加这个服务名字对应的服务 id
 			_unlock();
 			// 0 for query
 			skynet_harbor_register(name,0);
@@ -203,7 +212,11 @@ skynet_harbor_send(const char *name, struct skynet_message * message) {
 	}
 }
 
-// 请求查询某个服务名字
+/*
+ 请求 注册/查询 某个服务名字
+ name : 将要注册的全局服务名
+ handle : 对应的服务 id 。设置为 0 表示查询 name
+*/
 //queue a register message (destination = 0)
 void 
 skynet_harbor_register(const char *name, uint32_t handle) {
@@ -216,16 +229,19 @@ skynet_harbor_register(const char *name, uint32_t handle) {
 	send_notice();
 }
 
-// 将 name addr 键值对插入 Z->map
+/*
+ 将全局服务名和对应的服务 id 键值对插入 Z->map ，并将之前堆积在此服务的消息队列中的消息处理
+ 这个全局服务名也可能是本 skynet 节点的
+*/
 static void
 _register_name(const char *name, uint32_t addr) {
 	_lock();
 	struct keyvalue * node = _hash_search(Z->map, name);
 	if (node) {
-		if (node->value) {
+		if (node->value) {	// 已经有了，则是更新
 			node->value = addr;
-			assert(node->queue == NULL);
-		} else {
+			assert(node->queue == NULL);	// 既然之前就已经有了，必然创建了消息队列
+		} else {			// 之前已经有消息发往这个服务名字对应的服务了，只是之前还不知道这个服务名对应的服务 id 是多少
 			node->value = addr;
 		}
 	} else {
@@ -236,12 +252,12 @@ _register_name(const char *name, uint32_t addr) {
 	struct message_queue * queue = node ? node->queue : NULL;
 
 	if (queue) {
-		if (skynet_harbor_message_isremote(addr)) {
+		if (skynet_harbor_message_isremote(addr)) {		// 此服务属于别的 skynet 节点，则将之前堆积的消息放入 harbor 全局消息队列
 			while (skynet_mq_leave(queue, &msg)) {
 				msg.destination = addr;
 				skynet_mq_enter(Z->queue, &msg);
 			}
-		} else {
+		} else {										// 此服务属于本地 skynet 节点，则将之前堆积的消息放入本地消息队列
 			while (skynet_mq_leave(queue, &msg)) {
 				msg.destination = addr;
 				skynet_mq_push(&msg);
@@ -258,7 +274,9 @@ _register_name(const char *name, uint32_t addr) {
 	}
 }
 
-// 更新保存的 harbor id 以及地址信息
+/*
+ 将 harbor id 以及地址信息保存到本地，并建立联系
+*/
 static void
 _remote_harbor_update(int harbor_id, const char * addr) {
 	struct remote * r = &Z->remote[harbor_id-1];
@@ -290,7 +308,11 @@ _report_zmq_error(int rc) {
 	}
 }
 
-// harbor 更新或者全局服务名更新
+/*
+ 接收来自另外的 master 的广播消息：
+ 1. harbor id 和地址更新
+ 2. 服务名和地址更新
+*/
 static void
 _name_update() {
 	zmq_msg_t content;
@@ -335,7 +357,10 @@ _name_update() {
 	zmq_msg_close(&content);
 }
 
-// 查询某个 harbor id 对应的地址并更新
+/*
+ 向 master 查询某个 harbor id ，并与其建立连接
+ 形式为 %d 
+*/
 static void
 remote_query_harbor(int harbor_id) {
 	char tmp[32];
@@ -413,7 +438,10 @@ skynet_harbor_message_isremote(uint32_t handle) {
 	return !(harbor_id == 0 || harbor_id == Z->harbor);
 }
 
-// 注册全局服务名
+/*
+ 向 master 注册全局服务名
+ 形式为 %s=%X 前者为服务名，后者为服务 id
+*/
 static void
 _remote_register_name(const char *name, uint32_t source) {
 	char tmp[strlen(name) + 20];
@@ -429,7 +457,10 @@ _remote_register_name(const char *name, uint32_t source) {
 	zmq_msg_close(&msg);
 }
 
-// 查询某个服务名
+/*
+ 向 master 查询某个服务名，并将服务名对应的 handle id 保存到本地
+ 形式为 %s 
+*/
 static void
 _remote_query_name(const char *name) {
 	int sz = strlen(name);
@@ -475,6 +506,9 @@ remote_socket_send(void * socket, struct skynet_message *msg) {
 	zmq_msg_close(&part);
 }
 
+/*
+ 处理 harbor 全局队列中的消息
+*/
 static void
 _remote_send() {
 	struct skynet_message msg;
@@ -486,7 +520,7 @@ _goback:
 			if (msg.source) {	// 和 master 通信
 				_remote_register_name(name, msg.source);	// 注册全局服务名
 			} else {
-				_remote_query_name(name);					// 查询某个名字
+				_remote_query_name(name);					// 查询某个名字，并注册到本地
 			}
 
 			free(msg.data);
@@ -494,16 +528,21 @@ _goback:
 			int harbor_id = (msg.destination >> HANDLE_REMOTE_SHIFT);
 			assert(harbor_id > 0);
 			struct remote * r = &Z->remote[harbor_id-1];
-			if (r->socket == NULL) {
+			if (r->socket == NULL) {	// 对应的 skynet 节点并未与之建立连接
+				/*
+				 这里可能会奇怪为什么有的 r->socket == NULL 但是 r->queue != NULL
+				 因为，当第一次对一个没有建立连接的 skynet 节点发送消息的时候，会建立消息队列，
+				 所以当第二次其发送消息的时候消息队列已经存在了。
+				*/
 				if (r->queue == NULL) {
 					r->queue = skynet_mq_create(DEFAULT_QUEUE_SIZE);
 					skynet_mq_enter(r->queue, &msg);
 					remote_query_harbor(harbor_id);
 				} else {
-					skynet_mq_enter(r->queue, &msg);
+					skynet_mq_enter(r->queue, &msg);		// QUESTION : 为什么还会进这里？第一次的时候已经与对应的 skynet 节点建立连接了
 				}
 			} else {
-				remote_socket_send(r->socket, &msg);		// 给其它的 harbor 发送消息
+				remote_socket_send(r->socket, &msg);		// 给对应的 skynet 节点发送消息
 			}
 		}
 	}
@@ -526,6 +565,10 @@ skynet_harbor_dispatch_thread(void *ud) {
 	for (;;) {
 		zmq_poll(items,2,-1);			// -1 表示超时时间是无限
 		if (items[0].revents) {			// master 消息
+			/*
+			 查询某个服务名对应的地址，为发送消息做准备: skynet_harbor_send
+			 更新某个全局服务: skynet_harbor_register
+			*/
 			zmq_msg_t msg;
 			zmq_msg_init(&msg);
 			int rc = zmq_recv(Z->zmq_queue_notice,&msg,0);
@@ -565,7 +608,7 @@ register_harbor(void *request, const char *local, int harbor) {
 	if (sz > 0) {
 		memcpy(tmp,zmq_msg_data(&reply),sz);
 		tmp[sz] = '\0';
-		if (strcmp(tmp,local) != 0) {
+		if (strcmp(tmp,local) != 0) {	// 如果 harbor id 已经被注册了，并且注册的地址不是 local ，那么就是真的被别人注册了。不然就是我自己重复注册。
 			fprintf(stderr, "Harbor %d is already registered by %s [%s]\n", harbor, tmp, local);
 			exit(1);
 		}
@@ -612,7 +655,7 @@ skynet_harbor_init(const char * master, const char *local, int harbor) {
 		exit(1);
 	}
 	void *context = zmq_init (1);
-	void *request = zmq_socket (context, ZMQ_REQ);
+	void *request = zmq_socket (context, ZMQ_REQ);	// 所以是 skynet 节点先向 master 服务器发送消息，即请求注册 harbor id 消息
 	int r = zmq_connect(request, master);
 	if (r<0) {
 		fprintf(stderr, "Can't connect to master: %s\n",master);
@@ -636,7 +679,7 @@ skynet_harbor_init(const char * master, const char *local, int harbor) {
 	h->harbor = harbor;
 	h->queue = skynet_mq_create(DEFAULT_QUEUE_SIZE);
 	h->zmq_queue_notice = zmq_socket(context, ZMQ_PULL);
-	r = zmq_bind(h->zmq_queue_notice, "inproc://notice");
+	r = zmq_bind(h->zmq_queue_notice, "inproc://notice");	// 所以很多线程可以发送消息给它接收
 	assert(r==0);
 
 	Z = h;
