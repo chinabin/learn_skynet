@@ -119,7 +119,7 @@ skynet_context_release(struct skynet_context *ctx) {
 // 调用ctx的回调函数
 static void
 _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
-	// source 等于 -1 表示源于系统，见 skynet_timeout
+	// source 等于 SKYNET_SYSTEM_TIMER 表示源于系统，见 skynet_timeout
 	if (msg->source == SKYNET_SYSTEM_TIMER) {
 		ctx->cb(ctx, ctx->cb_ud, NULL, msg->data, msg->sz);
 	} else {
