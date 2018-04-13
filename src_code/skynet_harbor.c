@@ -543,7 +543,6 @@ _remote_send() {
 _goback:
 		if (msg.destination == SKYNET_SYSTEM_NAME) {	// skynet_harbor_register
 			// register name
-			const char * name = msg.data;
 			char * name = msg.message.data;
 
 			if (msg.message.source) {		// 和 master 通信

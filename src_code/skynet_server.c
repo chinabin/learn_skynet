@@ -183,7 +183,7 @@ skynet_context_message_dispatch(void) {
 		free(msg.data);
 		skynet_error(NULL, "Drop message from %u to %u without callback , size = %d",msg.source, handle, (int)msg.sz);
 	} else {	// 处理此消息
-		dispatch_message(ctx, &msg);
+		_dispatch_message(ctx, &msg);
 	}
 
 	skynet_context_release(ctx);
