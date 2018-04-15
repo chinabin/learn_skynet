@@ -12,23 +12,19 @@
 #include <stdio.h>
 
 #define BLACKHOLE "blackhole"
-#define DEFAULT_MESSAGE_QUEUE 16
+#define DEFAULT_MESSAGE_QUEUE 16 
 
 struct skynet_context {
 	void * instance;				// 实例指针，通过调用创建实例函数返回
 	struct skynet_module * mod;		// 实例对应的模块
 	uint32_t handle;				// 服务编号
-	/*
-	 calling 是一种标识，为 1 表示触发，为 0 表示没有触发
-	 当前的作用是，因为 init 接口中可能会给自己发消息，而消息的响应是需要调用回调函数，而回调函数的设置是在 init 接口中
-	 所以在这里设置一个标识，表示是否准备好。后面的消息分发代码中会查询这个设置，如果为 1 则将消息推送到消息队列，否则直接调用回调函数处理。
-	*/
-	int calling;
+
 	int ref;						// 引用计数
 	char handle_name[10];			// handle 的十六进制字符串形式
 	char result[32];				// 不同的命令会设置不同的返回值
 	void * cb_ud;					// 回调函数的第二个参数
 	skynet_cb cb;					// 回调函数指针，定义在 skynet.h : typedef void (*skynet_cb)(struct skynet_context * context, void *ud, const char * uid , const void * msg, size_t sz_session);
+	int in_global_queue;
 	struct message_queue *queue;
 };
 
@@ -70,19 +66,17 @@ skynet_context_new(const char * name, const char *parm) {
 	ctx->ref = 2;
 	ctx->cb = NULL;
 	ctx->cb_ud = NULL;
+	ctx->in_global_queue = 0;
 	char * uid = ctx->handle_name;
 	uid[0] = ':';
 	_id_to_hex(uid+1, ctx->handle);	// 应该放在后面一句 ctx->handle 赋值语句后面，后面的版本修复了
 
 	ctx->handle = skynet_handle_register(ctx); // 服务注册，获得服务编号
-	ctx->queue = skynet_mq_create(DEFAULT_MESSAGE_QUEUE);
-	ctx->calling = 1;
+	ctx->queue = skynet_mq_create(ctx->handle);
 	// init function maybe use ctx->handle, so it must init at last
 
 	int r = skynet_module_instance_init(mod, inst, ctx, parm);
 	if (r == 0) {
-		__sync_synchronize();
-		ctx->calling = 0;
 		return skynet_context_release(ctx);
 	} else {
 		skynet_context_release(ctx);
@@ -101,7 +95,9 @@ skynet_context_grab(struct skynet_context *ctx) {
 static void 
 _delete_context(struct skynet_context *ctx) {
 	skynet_module_instance_release(ctx->mod, ctx->instance);
-	skynet_mq_release(ctx->queue);
+	if (!ctx->in_global_queue) {
+		skynet_mq_release(ctx->queue);
+	}
 	free(ctx);
 }
 
@@ -119,7 +115,7 @@ skynet_context_release(struct skynet_context *ctx) {
 // 调用ctx的回调函数
 static void
 _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
-	// source 等于 -1 表示源于系统，见 skynet_timeout
+	// source 等于 SKYNET_SYSTEM_TIMER 表示源于系统，见 skynet_timeout
 	if (msg->source == SKYNET_SYSTEM_TIMER) {
 		ctx->cb(ctx, ctx->cb_ud, NULL, msg->data, msg->sz);
 	} else {
@@ -138,6 +134,19 @@ _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
 	}
 }
 
+static void
+_drop_queue(struct message_queue *q) {
+	// todo: send message back to message source
+	struct skynet_message msg;
+	while(!skynet_mq_pop(q, &msg)) {
+		if (skynet_harbor_message_isremote(msg.source)) {
+			skynet_harbor_message_close(&msg);
+		}
+		free(msg.data);
+	}
+	skynet_mq_release(q);
+}
+
 /*
  从全局消息队列中取出消息分发，返回 1 表示阻塞，当前无消息
  这个时候的消息队列比较简单，所有消息都是放进全局消息队列中，服务的私有消息队列只是
@@ -145,40 +154,41 @@ _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
 */
 int
 skynet_context_message_dispatch(void) {
-	struct skynet_message msg;
-	/*
-	 从全局消息队列中取出一个消息
-	*/
-	uint32_t handle = skynet_mq_pop(&msg);	// handle 为消息的目的地的服务编号
-	if (handle == 0) {
+	struct message_queue * q = skynet_globalmq_pop();
+	if (q==NULL)
 		return 1;
-	}
+
+	uint32_t handle = skynet_mq_handle(q);
+
 	struct skynet_context * ctx = skynet_handle_grab(handle);
 	if (ctx == NULL) {	// 服务已销毁则丢弃消息到黑洞
-		free(msg.data);
-		skynet_error(NULL, "Drop message from %u to %u , size = %d",msg.source, msg.destination, (int)msg.sz);
+		skynet_error(NULL, "Drop message queue %u ", handle);
+		_drop_queue(q);
 		return 0;
 	}
-	if (__sync_lock_test_and_set(&ctx->calling, 1)) {	// 服务还没有设置好，无法处理此消息，所以先放入消息队列
-		// When calling, push to context's message queue
-		skynet_mq_enter(ctx->queue, &msg);
-	} else {	// 处理此消息
-		if (ctx->cb == NULL) { // 回调函数为空则丢弃消息到黑洞
-			if (skynet_harbor_message_isremote(msg.source)) {
-				skynet_harbor_message_close(&msg);
-			}
-			free(msg.data);
-			skynet_error(NULL, "Drop message from %u to %u without callback , size = %d",msg.source, msg.destination, (int)msg.sz);
-		} else {
-			_dispatch_message(ctx, &msg);	// 处理消息
-			while(skynet_mq_leave(ctx->queue,&msg)) {	// 处理 ctx 私有消息队列剩余消息
-				_dispatch_message(ctx,&msg);
-			}
+	assert(ctx->in_global_queue);
+
+	struct skynet_message msg;
+	if (skynet_mq_pop(q,&msg)) {
+		// empty queue
+		__sync_lock_release(&ctx->in_global_queue);
+		skynet_context_release(ctx);
+		return 0;
+	}
+
+	if (ctx->cb == NULL) {
+		if (skynet_harbor_message_isremote(msg.source)) {
+			skynet_harbor_message_close(&msg);
 		}
-		__sync_lock_release(&ctx->calling);
+		free(msg.data);
+		skynet_error(NULL, "Drop message from %u to %u without callback , size = %d",msg.source, handle, (int)msg.sz);
+	} else {	// 处理此消息
+		_dispatch_message(ctx, &msg);
 	}
 
 	skynet_context_release(ctx);
+
+	skynet_globalmq_push(q);
 
 	return 0;
 }
@@ -259,23 +269,24 @@ skynet_send(struct skynet_context * context, const char * addr , void * msg, siz
 	} else {
 		struct skynet_message smsg;
 		smsg.source = context->handle;
-		smsg.destination = 0;
 		smsg.data = msg;
 		smsg.sz = sz;
-		skynet_harbor_send(addr, &smsg);
+		skynet_harbor_send(addr, 0, &smsg);
 		return;
 	}
 
 	assert(des > 0);
 	struct skynet_message smsg;
 	smsg.source = context->handle;
-	smsg.destination = des;
 	smsg.data = msg;
 	smsg.sz = sz;
+
 	if (skynet_harbor_message_isremote(des)) {
-		skynet_harbor_send(NULL, &smsg);
-	} else {
-		skynet_mq_push(&smsg);
+		skynet_harbor_send(NULL, des, &smsg);
+	} else if (skynet_context_push(des, &smsg)) {
+		free(msg);
+		skynet_error(NULL, "Drop message from %u to %s (size=%d)", smsg.source, addr, (int)sz);
+		return;
 	}
 }
 
@@ -299,3 +310,17 @@ skynet_callback(struct skynet_context * context, void *ud, skynet_cb cb) {
 	context->cb_ud = ud;
 }
 
+int
+skynet_context_push(uint32_t handle, struct skynet_message *message) {
+	struct skynet_context * ctx = skynet_handle_grab(handle);
+	if (ctx == NULL) {
+		return -1;
+	}
+	skynet_mq_push(ctx->queue, message);
+	if (__sync_lock_test_and_set(&ctx->in_global_queue,1) == 0) {
+		skynet_globalmq_push(ctx->queue);
+	}
+	skynet_context_release(ctx);
+
+	return 0;
+}

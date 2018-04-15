@@ -2,6 +2,7 @@
 #define SKYNET_TIMER_H
 
 #include "skynet_system.h"
+
 #include <stdint.h>
 
 /*
@@ -9,7 +10,7 @@
  当 message 的 data 不为空的时候， sz 表示 data 大小。
  当 message 的 data 为空的时候， sz 表示两方通信的一个简单约定。
 */
-void skynet_timeout(int handle, int time, int session);
+void skynet_timeout(uint32_t handle, int time, int session);
 // 更新计时器，执行刷新函数
 void skynet_updatetime(void);
 // 计时器，系统开机到现在的秒数，单位是 10 毫秒
