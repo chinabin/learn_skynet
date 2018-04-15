@@ -14,6 +14,25 @@
 #define BLACKHOLE "blackhole"
 #define DEFAULT_MESSAGE_QUEUE 16 
 
+/*
+节点：运行可执行服务端程序文件 "skynet" ，即启动了一个“节点”。每个节点可以启动多个服务( service )。
+
+模块( module )：模块是一个动态库文件(.so)，若要创建一个能被 skynet 调用的模块，
+				假设模块名为xxx，必须实现4个函数xxx_create、xxx_init、xxx_release。
+
+服务( service )： module 被 skynet 加载运行，就成为一个 service 。
+				  每个 service 有唯一的 handle ID 。同节点的 service 之间可以通过全局
+				  消息队列通讯。
+
+harbor： harbor 是一种特殊的 service ，它代理不同节点之间的通讯。
+		 用一个 32 位（4字节）的变量来唯一标识一个服务：高 8 位表示该 service 所
+		 属的 harbor ID ，低 24 位表示 handle ID 。如果消息队列中的某个消息所指
+		 定处理者的 ID 的高 8 位（即 harbor ID )与本节点 harbor ID 不同，表示该
+		 消息将经过 harbor 转发到另外一个节点的服务来处理。
+
+service 的 context ：每个 service 对应一个 context ， context 保存了本 service 运行
+					 时的各种状态和变量。
+*/
 struct skynet_context {
 	void * instance;				// 实例指针，通过调用创建实例函数返回
 	struct skynet_module * mod;		// 实例对应的模块
@@ -24,7 +43,7 @@ struct skynet_context {
 	char result[32];				// 不同的命令会设置不同的返回值
 	void * cb_ud;					// 回调函数的第二个参数
 	skynet_cb cb;					// 回调函数指针，定义在 skynet.h : typedef void (*skynet_cb)(struct skynet_context * context, void *ud, const char * uid , const void * msg, size_t sz_session);
-	int in_global_queue;
+	int in_global_queue;			// 当前服务的消息队列是否已经在全局消息队列的标识
 	struct message_queue *queue;
 };
 
@@ -72,7 +91,7 @@ skynet_context_new(const char * name, const char *parm) {
 	_id_to_hex(uid+1, ctx->handle);	// 应该放在后面一句 ctx->handle 赋值语句后面，后面的版本修复了
 
 	ctx->handle = skynet_handle_register(ctx); // 服务注册，获得服务编号
-	ctx->queue = skynet_mq_create(ctx->handle);
+	ctx->queue = skynet_mq_create(ctx->handle);	// 创建和服务挂钩的消息队列
 	// init function maybe use ctx->handle, so it must init at last
 
 	int r = skynet_module_instance_init(mod, inst, ctx, parm);
@@ -134,6 +153,7 @@ _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
 	}
 }
 
+// 丢弃消息队列
 static void
 _drop_queue(struct message_queue *q) {
 	// todo: send message back to message source
@@ -154,11 +174,11 @@ _drop_queue(struct message_queue *q) {
 */
 int
 skynet_context_message_dispatch(void) {
-	struct message_queue * q = skynet_globalmq_pop();
+	struct message_queue * q = skynet_globalmq_pop();	// 从全局消息队列中取出一个消息队列
 	if (q==NULL)
 		return 1;
 
-	uint32_t handle = skynet_mq_handle(q);
+	uint32_t handle = skynet_mq_handle(q);				// 获得消息队列挂钩的服务 id
 
 	struct skynet_context * ctx = skynet_handle_grab(handle);
 	if (ctx == NULL) {	// 服务已销毁则丢弃消息到黑洞
@@ -171,7 +191,7 @@ skynet_context_message_dispatch(void) {
 	struct skynet_message msg;
 	if (skynet_mq_pop(q,&msg)) {
 		// empty queue
-		__sync_lock_release(&ctx->in_global_queue);
+		__sync_lock_release(&ctx->in_global_queue);		// 将 ctx->in_global_queue 置 0
 		skynet_context_release(ctx);
 		return 0;
 	}
@@ -188,7 +208,7 @@ skynet_context_message_dispatch(void) {
 
 	skynet_context_release(ctx);
 
-	skynet_globalmq_push(q);
+	skynet_globalmq_push(q);		// 塞回全局消息队列，这样的 push 和 pop 保证了公平性
 
 	return 0;
 }
@@ -310,6 +330,8 @@ skynet_callback(struct skynet_context * context, void *ud, skynet_cb cb) {
 	context->cb_ud = ud;
 }
 
+// 将消息放入服务对应的消息队列，并将消息队列加入全局消息队列
+// 返回 0 表示成功，返回 -1 表示 handle 对应的服务不存在
 int
 skynet_context_push(uint32_t handle, struct skynet_message *message) {
 	struct skynet_context * ctx = skynet_handle_grab(handle);
@@ -317,7 +339,7 @@ skynet_context_push(uint32_t handle, struct skynet_message *message) {
 		return -1;
 	}
 	skynet_mq_push(ctx->queue, message);
-	if (__sync_lock_test_and_set(&ctx->in_global_queue,1) == 0) {
+	if (__sync_lock_test_and_set(&ctx->in_global_queue,1) == 0) {	// 将 ctx->in_global_queue 设为 1 并返回 ctx->in_global_queue 操作之前的值。
 		skynet_globalmq_push(ctx->queue);
 	}
 	skynet_context_release(ctx);

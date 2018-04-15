@@ -141,6 +141,7 @@ timer_execute(struct timer *T)
 		current=link_clear(&T->near[idx]);
 		
 		do {
+			// 定时到期，将消息推到消息队列
 			struct timer_event * event = (struct timer_event *)(current+1);
 			struct skynet_message message;
 			message.source = SKYNET_SYSTEM_TIMER;
