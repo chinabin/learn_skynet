@@ -43,6 +43,7 @@ struct skynet_context {
 	char result[32];				// 不同的命令会设置不同的返回值
 	void * cb_ud;					// 回调函数的第二个参数
 	skynet_cb cb;					// 回调函数指针，定义在 skynet.h : typedef void (*skynet_cb)(struct skynet_context * context, void *ud, const char * uid , const void * msg, size_t sz_session);
+	int session_id;
 	int in_global_queue;			// 当前服务的消息队列是否已经在全局消息队列的标识
 	struct message_queue *queue;
 };
@@ -86,6 +87,7 @@ skynet_context_new(const char * name, const char *parm) {
 	ctx->cb = NULL;
 	ctx->cb_ud = NULL;
 	ctx->in_global_queue = 0;
+	ctx->session_id = 0;
 	char * uid = ctx->handle_name;
 	uid[0] = ':';
 	_id_to_hex(uid+1, ctx->handle);	// 应该放在后面一句 ctx->handle 赋值语句后面，后面的版本修复了
@@ -102,6 +104,17 @@ skynet_context_new(const char * name, const char *parm) {
 		skynet_handle_retire(ctx->handle);
 		return NULL;
 	}
+}
+
+static int
+_new_session(struct skynet_context *ctx) {
+	int session = ++ctx->session_id;
+	if (session < 0) {
+		ctx->session_id = 1;
+		return 1;
+	}
+
+	return session;
 }
 
 // 增加 ctx 的引用计数
@@ -136,17 +149,17 @@ static void
 _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
 	// source 等于 SKYNET_SYSTEM_TIMER 表示源于系统，见 skynet_timeout
 	if (msg->source == SKYNET_SYSTEM_TIMER) {
-		ctx->cb(ctx, ctx->cb_ud, NULL, msg->data, msg->sz);
+		ctx->cb(ctx, ctx->cb_ud, msg->session, NULL, msg->data, msg->sz);
 	} else {
 		char tmp[10];
 		tmp[0] = ':';
 		_id_to_hex(tmp+1, msg->source);
 		if (skynet_harbor_message_isremote(msg->source)) {
 			void * data = skynet_harbor_message_open(msg);
-			ctx->cb(ctx, ctx->cb_ud, tmp, data, msg->sz);
+			ctx->cb(ctx, ctx->cb_ud, msg->session, tmp, data, msg->sz);
 			skynet_harbor_message_close(msg);
 		} else {
-			ctx->cb(ctx, ctx->cb_ud, tmp, msg->data, msg->sz);
+			ctx->cb(ctx, ctx->cb_ud, msg->session, tmp, msg->data, msg->sz);
 		}
 
 		free(msg->data);
@@ -214,15 +227,12 @@ skynet_context_message_dispatch(void) {
 }
 
 const char * 
-skynet_command(struct skynet_context * context, const char * cmd , const char * parm) {
+skynet_command(struct skynet_context * context, const char * cmd , int session, const char * parm) {
 	if (strcmp(cmd,"TIMEOUT") == 0) {	// 添加一个定时器消息，自己给自己发消息
 		//time:session
 		char * session_ptr = NULL;
 		//strtol会将parm按照10指定的基数转换然后返回。遇到的第一个非法值会将地址赋值给第二个参数
 		int ti = strtol(parm, &session_ptr, 10);
-		char sep = session_ptr[0];
-		assert(sep == ':');
-		int session = strtol(session_ptr+1, NULL, 10);
 		skynet_timeout(context->handle, ti, session);
 		return NULL;
 	}
@@ -275,7 +285,10 @@ skynet_command(struct skynet_context * context, const char * cmd , const char * 
  addr: 如果以':'开头则后面跟的是 handle ，如果以'.'开头则后面跟的是 handle name
 */
 void 
-skynet_send(struct skynet_context * context, const char * addr , void * msg, size_t sz) {
+skynet_send(struct skynet_context * context, const char * addr , int session, void * msg, size_t sz) {
+	if (session < 0) {
+		session = _new_session(context);
+	}
 	uint32_t des = 0;
 	if (addr[0] == ':') {
 		des = strtol(addr+1, NULL, 16);
@@ -289,6 +302,7 @@ skynet_send(struct skynet_context * context, const char * addr , void * msg, siz
 	} else {
 		struct skynet_message smsg;
 		smsg.source = context->handle;
+		smsg.session = session;
 		smsg.data = msg;
 		smsg.sz = sz;
 		skynet_harbor_send(addr, 0, &smsg);
@@ -298,6 +312,7 @@ skynet_send(struct skynet_context * context, const char * addr , void * msg, siz
 	assert(des > 0);
 	struct skynet_message smsg;
 	smsg.source = context->handle;
+	smsg.session = session;
 	smsg.data = msg;
 	smsg.sz = sz;
 
@@ -337,6 +352,9 @@ skynet_context_push(uint32_t handle, struct skynet_message *message) {
 	struct skynet_context * ctx = skynet_handle_grab(handle);
 	if (ctx == NULL) {
 		return -1;
+	}
+	if (message->session < 0) {
+		message->session = _new_session(ctx);
 	}
 	skynet_mq_push(ctx->queue, message);
 	if (__sync_lock_test_and_set(&ctx->in_global_queue,1) == 0) {	// 将 ctx->in_global_queue 设为 1 并返回 ctx->in_global_queue 操作之前的值。
