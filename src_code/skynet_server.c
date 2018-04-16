@@ -43,7 +43,7 @@ struct skynet_context {
 	char result[32];				// 不同的命令会设置不同的返回值
 	void * cb_ud;					// 回调函数的第二个参数
 	skynet_cb cb;					// 回调函数指针，定义在 skynet.h : typedef void (*skynet_cb)(struct skynet_context * context, void *ud, const char * uid , const void * msg, size_t sz_session);
-	int session_id;
+	int session_id;					// session_id 是一种约定，当消息发送方需要接收方回复的时候，两个消息的 session_id 一致。
 	int in_global_queue;			// 当前服务的消息队列是否已经在全局消息队列的标识
 	struct message_queue *queue;
 };
@@ -226,10 +226,16 @@ skynet_context_message_dispatch(void) {
 	return 0;
 }
 
+/*
+ session : 约定的 session
+*/
 const char * 
 skynet_command(struct skynet_context * context, const char * cmd , int session, const char * parm) {
 	if (strcmp(cmd,"TIMEOUT") == 0) {	// 添加一个定时器消息，自己给自己发消息
 		//time:session
+		// 上面的 time:session 是作者旧的注释，添加 session 之后就变成错误的注释了
+		// 当发送 TIMEOUT 命令的时候， session_ptr 就是定时器时间
+		// 使用方法例如： skynet.command("TIMEOUT", 0, "0") 
 		char * session_ptr = NULL;
 		//strtol会将parm按照10指定的基数转换然后返回。遇到的第一个非法值会将地址赋值给第二个参数
 		int ti = strtol(parm, &session_ptr, 10);

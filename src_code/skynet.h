@@ -22,7 +22,7 @@ void skynet_send(struct skynet_context * context, const char * addr , int sessio
  ud 是 skynet_callback 设置的第二个参数
  addr 是源服务地址
  msg 是消息数据
- sz 是数据大小或者一个约定号
+ sz 是一个约定号
 */
 typedef void (*skynet_cb)(struct skynet_context * context, void *ud, int session, const char * addr , const void * msg, size_t sz);
 // 设置 ctx 的 回调函数接口以及传入回调函数的第二个参数
