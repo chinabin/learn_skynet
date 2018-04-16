@@ -201,12 +201,18 @@ skynet_context_message_dispatch(void) {
 	}
 	assert(ctx->in_global_queue);
 
+	int re_q = 1;
 	struct skynet_message msg;
 	if (skynet_mq_pop(q,&msg)) {
 		// empty queue
 		__sync_lock_release(&ctx->in_global_queue);		// 将 ctx->in_global_queue 置 0
-		skynet_context_release(ctx);
-		return 0;
+		if (skynet_mq_pop(q,&msg)) {
+			skynet_context_release(ctx);
+			return 0;
+		}
+		if (__sync_lock_test_and_set(&ctx->in_global_queue, 1)) {
+			re_q = 0;
+		}
 	}
 
 	if (ctx->cb == NULL) {
@@ -221,7 +227,9 @@ skynet_context_message_dispatch(void) {
 
 	skynet_context_release(ctx);
 
-	skynet_globalmq_push(q);		// 塞回全局消息队列，这样的 push 和 pop 保证了公平性
+	if (re_q) {
+		skynet_globalmq_push(q);	// 塞回全局消息队列，这样的 push 和 pop 保证了公平性
+	}
 
 	return 0;
 }
