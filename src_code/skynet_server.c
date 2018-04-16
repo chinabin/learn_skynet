@@ -106,8 +106,8 @@ skynet_context_new(const char * name, const char *parm) {
 	}
 }
 
-static int
-_new_session(struct skynet_context *ctx) {
+int
+skynet_context_newsession(struct skynet_context *ctx) {
 	int session = ++ctx->session_id;
 	if (session < 0) {
 		ctx->session_id = 1;
@@ -195,7 +195,7 @@ skynet_context_message_dispatch(void) {
 
 	struct skynet_context * ctx = skynet_handle_grab(handle);
 	if (ctx == NULL) {	// 服务已销毁则丢弃消息到黑洞
-		skynet_error(NULL, "Drop message queue %u ", handle);
+		skynet_error(NULL, "Drop message queue %x ", handle);
 		_drop_queue(q);
 		return 0;
 	}
@@ -220,7 +220,7 @@ skynet_context_message_dispatch(void) {
 			skynet_harbor_message_close(&msg);
 		}
 		free(msg.data);
-		skynet_error(NULL, "Drop message from %u to %u without callback , size = %d",msg.source, handle, (int)msg.sz);
+		skynet_error(NULL, "Drop message from %x to %x without callback , size = %d",msg.source, handle, (int)msg.sz);
 	} else {	// 处理此消息
 		_dispatch_message(ctx, &msg);
 	}
@@ -246,9 +246,11 @@ skynet_command(struct skynet_context * context, const char * cmd , int session, 
 		// 使用方法例如： skynet.command("TIMEOUT", 0, "0") 
 		char * session_ptr = NULL;
 		//strtol会将parm按照10指定的基数转换然后返回。遇到的第一个非法值会将地址赋值给第二个参数
-		int ti = strtol(parm, &session_ptr, 10);
-		skynet_timeout(context->handle, ti, session);
-		return NULL;
+		session = skynet_timeout(context->handle, ti, session);
+		if (session < 0)
+			return NULL;
+		sprintf(context->result, "%d", session);
+		return context->result;
 	}
 
 	if (strcmp(cmd,"NOW") == 0) {	// 返回系统开机到现在的时间，单位是 10 毫秒
@@ -298,10 +300,10 @@ skynet_command(struct skynet_context * context, const char * cmd , int session, 
  服务 context->handle 给服务 addr 发消息
  addr: 如果以':'开头则后面跟的是 handle ，如果以'.'开头则后面跟的是 handle name
 */
-void 
+int 
 skynet_send(struct skynet_context * context, const char * addr , int session, void * msg, size_t sz) {
 	if (session < 0) {
-		session = _new_session(context);
+		session = skynet_context_newsession(context);
 	}
 	uint32_t des = 0;
 	if (addr[0] == ':') {
@@ -311,7 +313,7 @@ skynet_send(struct skynet_context * context, const char * addr , int session, vo
 		if (des == 0) {
 			free(msg);
 			skynet_error(context, "Drop message to %s, size = %d", addr, (int)sz);
-			return;
+			return session;
 		}
 	} else {
 		struct skynet_message smsg;
@@ -320,7 +322,7 @@ skynet_send(struct skynet_context * context, const char * addr , int session, vo
 		smsg.data = msg;
 		smsg.sz = sz;
 		skynet_harbor_send(addr, 0, &smsg);
-		return;
+		return session;
 	}
 
 	assert(des > 0);
@@ -334,9 +336,10 @@ skynet_send(struct skynet_context * context, const char * addr , int session, vo
 		skynet_harbor_send(NULL, des, &smsg);
 	} else if (skynet_context_push(des, &smsg)) {
 		free(msg);
-		skynet_error(NULL, "Drop message from %u to %s (size=%d)", smsg.source, addr, (int)sz);
-		return;
+		skynet_error(NULL, "Drop message from %x to %s (size=%d)", smsg.source, addr, (int)sz);
+		return -1;
 	}
+	return session;
 }
 
 // 返回 ctx 的 handle
@@ -367,9 +370,7 @@ skynet_context_push(uint32_t handle, struct skynet_message *message) {
 	if (ctx == NULL) {
 		return -1;
 	}
-	if (message->session < 0) {
-		message->session = _new_session(ctx);
-	}
+	assert(message->session >= 0);
 	skynet_mq_push(ctx->queue, message);
 	if (__sync_lock_test_and_set(&ctx->in_global_queue,1) == 0) {	// 将 ctx->in_global_queue 设为 1 并返回 ctx->in_global_queue 操作之前的值。
 		skynet_globalmq_push(ctx->queue);

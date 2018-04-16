@@ -5,6 +5,7 @@
 对第三方提供的接口，让第三方可以编写自己的服务
 */
 #include <stddef.h>
+#include <stdint.h>
 
 struct skynet_context;
 
@@ -15,7 +16,7 @@ const char * skynet_command(struct skynet_context * context, const char * cmd , 
  服务 context->handle 给服务 addr 发消息
  addr: 如果以':'开头则后面跟的是 handle ，如果以'.'开头则后面跟的是 handle name
 */
-void skynet_send(struct skynet_context * context, const char * addr , int session, void * msg, size_t sz);
+int skynet_send(struct skynet_context * context, const char * addr , int session, void * msg, size_t sz);
 
 /*
  context 是服务指针

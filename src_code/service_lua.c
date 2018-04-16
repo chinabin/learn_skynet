@@ -20,6 +20,18 @@ _load(lua_State *L, char ** filename) {
 	return r != LUA_OK;
 }
 
+static int 
+traceback (lua_State *L) {
+  const char *msg = lua_tostring(L, 1);
+  if (msg)
+    luaL_traceback(L, L, msg, 1);
+  else if (!lua_isnoneornil(L, 1)) {  /* is there an error object? */
+    if (!luaL_callmeta(L, 1, "__tostring"))  /* try its 'tostring' metamethod */
+      lua_pushliteral(L, "(no error message)");
+  }
+  return 1;
+}
+
 // 加载并执行 snlua XX.lua parms 中的 XX.lua 代码并传入 parms 参数
 // snlua 服务的 init 接口中关于回调函数的设置放在 XX.lua 文件中。
 int
@@ -36,6 +48,8 @@ snlua_init(lua_State *L, struct skynet_context *ctx, const char * args) {
 	char tmp[strlen(args)+1];
 	char *parm = tmp;
 	strcpy(parm,args);
+
+	lua_pushcfunction(L, traceback);
 
 	//将lua文件加载
 	const char * filename = parm;
@@ -57,7 +71,7 @@ snlua_init(lua_State *L, struct skynet_context *ctx, const char * args) {
 		调用lua代码，因为lua代码第一句都是 require "skynet" ，
 		所以将会调用 lua-skynet.c 文件中的 luaopen_skynet 函数
 	*/
-	r = lua_pcall(L,n,0,0);
+	r = lua_pcall(L,n,0,-n-2);
 	switch (r) {
 	case LUA_OK:
 		return 0;

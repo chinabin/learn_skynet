@@ -1,6 +1,7 @@
 #include "skynet_timer.h"
 #include "skynet_mq.h"
 #include "skynet_server.h"
+#include "skynet_handle.h"
 
 #include <time.h>
 #include <assert.h>
@@ -224,8 +225,17 @@ timer_create_timer()
  当 message 的 data 不为空的时候， sz 表示 data 大小。
  当 message 的 data 为空的时候， sz 表示两方通信的一个简单约定。
 */
-void 
+int 
 skynet_timeout(uint32_t handle, int time, int session) {
+	if (session < 0) {
+		struct skynet_context * ctx = skynet_handle_grab(handle);
+		if (ctx == NULL) {
+			return -1;
+		}
+		session = skynet_context_newsession(ctx);
+		skynet_context_release(ctx);
+	}
+
 	// time 为0属于特例，不进入 timer 队列，而是直接进入消息队列
 	if (time == 0) {
 		struct skynet_message message;
@@ -235,7 +245,7 @@ skynet_timeout(uint32_t handle, int time, int session) {
 		message.sz = 0;
 
 		if (skynet_context_push(handle, &message)) {
-			return;
+			return -1;
 		}
 	} else {
 		struct timer_event event;
@@ -243,6 +253,8 @@ skynet_timeout(uint32_t handle, int time, int session) {
 		event.session = session;
 		timer_add(TI, &event, sizeof(event), time);
 	}
+
+	return session;
 }
 
 // 计算系统开机到现在的秒数，单位是 10 豪秒
