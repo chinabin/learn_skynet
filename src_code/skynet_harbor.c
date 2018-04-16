@@ -346,6 +346,41 @@ _report_zmq_error(int rc) {
 	}
 }
 
+static int
+_isdecimal(int c) {
+	return c>='0' && c<='9';
+}
+
+/*
+ 如果 buf 形式为 %d=%s 则 *np = %d ，返回等号的位置
+ 如果 buf 形式为 %s=%d 则返回 %s 的长度
+ 如果 buf 形式为 %s 则返回 -1
+*/
+// Name-updating protocols:
+//
+// 1) harbor_id=harbor_address
+// 2) context_name=context_handle
+static int
+_split_name(uint8_t *buf, int len, int *np) {
+	uint8_t *sep;
+	if (len > 0 && _isdecimal(buf[0])) {
+		int i=0;
+		int n=0;
+		do {
+			n = n*10 + (buf[i]-'0');
+		} while(++i<len && _isdecimal(buf[i]));
+		if (i < len && buf[i] == '=') {
+			buf[i] = '\0';
+			*np = n;
+			return i;
+		}
+	} else if ((sep = memchr(buf, '=', len)) != NULL) {
+		*sep = '\0';
+		return (int)(sep-buf);
+	}
+	return -1;
+}
+
 /*
  接收来自另外的 master 的广播消息：
  1. harbor id 和地址更新
@@ -359,17 +394,11 @@ _name_update() {
 	int rc = zmq_recv(Z->zmq_local,&content,0);
 	_report_zmq_error(rc);
 	int sz = zmq_msg_size(&content);
-	int i;
-	int n = 0;
 	uint8_t * buffer = zmq_msg_data(&content);
-	for (i=0;i<sz;i++) {
-		if (buffer[i] == '=') {
-			buffer[i] = '\0';
-			break;
-		}
-		n = n * 10 + (buffer[i] - '0');
-	}
-	if (i==sz) {
+	
+	int n = 0;
+	int i = _split_name(buffer, sz, &n);
+	if (i == -1) {
 		char tmp[sz+1];
 		memcpy(tmp,buffer,sz);
 		tmp[sz] = '\0';
