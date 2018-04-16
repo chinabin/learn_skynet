@@ -395,7 +395,7 @@ _name_update() {
 	_report_zmq_error(rc);
 	int sz = zmq_msg_size(&content);
 	uint8_t * buffer = zmq_msg_data(&content);
-	
+
 	int n = 0;
 	int i = _split_name(buffer, sz, &n);
 	if (i == -1) {
@@ -614,6 +614,7 @@ _goback:
 	// double check
 	if (!skynet_remotemq_pop(Z->queue,&msg)) {
 		printf("goback %x\n",msg.destination);
+		__sync_lock_test_and_set(&Z->notice_event, 1);
 		goto _goback;
 	}
 }
