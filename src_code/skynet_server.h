@@ -21,7 +21,7 @@ struct skynet_context * skynet_context_release(struct skynet_context *);
 uint32_t skynet_context_handle(struct skynet_context *);
 // 设置 ctx 的 handle
 void skynet_context_init(struct skynet_context *, uint32_t handle);
-// 未实现
+// 将消息放入服务对应的消息队列，并将消息队列加入全局消息队列
 int skynet_context_push(uint32_t handle, struct skynet_message *message);
 /*
  从全局消息队列中取出消息分发，返回 1 表示阻塞，当前无消息

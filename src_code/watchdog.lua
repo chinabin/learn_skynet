@@ -13,23 +13,23 @@ local command = {}
 function command:open(parm)
 	local fd,addr = string.match(parm,"(%d+) ([^%s]+)")
 	fd = tonumber(fd)
-	skynet.send("LOG",string.format("%d %d %s",self,fd,addr))
+	skynet.send("LOG",0, string.format("%d %d %s",self,fd,addr))
 	local agent = skynet.command("LAUNCH","snlua agent.lua ".. self)	-- 这里启动一个 snlua 服务，返回服务地址。并且因为 open 命令处理的是用户连接，所以经常在网上看到的说每个用户接入会启动一个 agent 。
 	if agent then
-		skynet.send("gate","forward ".. self .. " " .. agent)
+		skynet.send("gate",0, "forward ".. self .. " " .. agent)
 	end
 end
 
 function command:close()
-	skynet.send("LOG",string.format("close %d",self))
+	skynet.send("LOG",0, string.format("close %d",self))
 end
 
 function command:data(data)
-	skynet.send("LOG",string.format("data %d size=%d",self,#data))
+	skynet.send("LOG",0, string.format("data %d size=%d",self,#data))
 end
 
 -- 给 watchdog 发消息的回调函数
-skynet.callback(function(from , message)
+skynet.callback(function(session, from , message)
 	local id, cmd , parm = string.match(message, "(%d+) (%w+) ?(.*)")
 	id = tonumber(id)
 	local f = command[cmd]

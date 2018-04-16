@@ -14,6 +14,25 @@
 #define BLACKHOLE "blackhole"
 #define DEFAULT_MESSAGE_QUEUE 16 
 
+/*
+节点：运行可执行服务端程序文件 "skynet" ，即启动了一个“节点”。每个节点可以启动多个服务( service )。
+
+模块( module )：模块是一个动态库文件(.so)，若要创建一个能被 skynet 调用的模块，
+				假设模块名为xxx，必须实现4个函数xxx_create、xxx_init、xxx_release。
+
+服务( service )： module 被 skynet 加载运行，就成为一个 service 。
+				  每个 service 有唯一的 handle ID 。同节点的 service 之间可以通过全局
+				  消息队列通讯。
+
+harbor： harbor 是一种特殊的 service ，它代理不同节点之间的通讯。
+		 用一个 32 位（4字节）的变量来唯一标识一个服务：高 8 位表示该 service 所
+		 属的 harbor ID ，低 24 位表示 handle ID 。如果消息队列中的某个消息所指
+		 定处理者的 ID 的高 8 位（即 harbor ID )与本节点 harbor ID 不同，表示该
+		 消息将经过 harbor 转发到另外一个节点的服务来处理。
+
+service 的 context ：每个 service 对应一个 context ， context 保存了本 service 运行
+					 时的各种状态和变量。
+*/
 struct skynet_context {
 	void * instance;				// 实例指针，通过调用创建实例函数返回
 	struct skynet_module * mod;		// 实例对应的模块
@@ -24,7 +43,8 @@ struct skynet_context {
 	char result[32];				// 不同的命令会设置不同的返回值
 	void * cb_ud;					// 回调函数的第二个参数
 	skynet_cb cb;					// 回调函数指针，定义在 skynet.h : typedef void (*skynet_cb)(struct skynet_context * context, void *ud, const char * uid , const void * msg, size_t sz_session);
-	int in_global_queue;
+	int session_id;
+	int in_global_queue;			// 当前服务的消息队列是否已经在全局消息队列的标识
 	struct message_queue *queue;
 };
 
@@ -67,12 +87,13 @@ skynet_context_new(const char * name, const char *parm) {
 	ctx->cb = NULL;
 	ctx->cb_ud = NULL;
 	ctx->in_global_queue = 0;
+	ctx->session_id = 0;
 	char * uid = ctx->handle_name;
 	uid[0] = ':';
 	_id_to_hex(uid+1, ctx->handle);	// 应该放在后面一句 ctx->handle 赋值语句后面，后面的版本修复了
 
 	ctx->handle = skynet_handle_register(ctx); // 服务注册，获得服务编号
-	ctx->queue = skynet_mq_create(ctx->handle);
+	ctx->queue = skynet_mq_create(ctx->handle);	// 创建和服务挂钩的消息队列
 	// init function maybe use ctx->handle, so it must init at last
 
 	int r = skynet_module_instance_init(mod, inst, ctx, parm);
@@ -83,6 +104,17 @@ skynet_context_new(const char * name, const char *parm) {
 		skynet_handle_retire(ctx->handle);
 		return NULL;
 	}
+}
+
+static int
+_new_session(struct skynet_context *ctx) {
+	int session = ++ctx->session_id;
+	if (session < 0) {
+		ctx->session_id = 1;
+		return 1;
+	}
+
+	return session;
 }
 
 // 增加 ctx 的引用计数
@@ -117,23 +149,24 @@ static void
 _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
 	// source 等于 SKYNET_SYSTEM_TIMER 表示源于系统，见 skynet_timeout
 	if (msg->source == SKYNET_SYSTEM_TIMER) {
-		ctx->cb(ctx, ctx->cb_ud, NULL, msg->data, msg->sz);
+		ctx->cb(ctx, ctx->cb_ud, msg->session, NULL, msg->data, msg->sz);
 	} else {
 		char tmp[10];
 		tmp[0] = ':';
 		_id_to_hex(tmp+1, msg->source);
 		if (skynet_harbor_message_isremote(msg->source)) {
 			void * data = skynet_harbor_message_open(msg);
-			ctx->cb(ctx, ctx->cb_ud, tmp, data, msg->sz);
+			ctx->cb(ctx, ctx->cb_ud, msg->session, tmp, data, msg->sz);
 			skynet_harbor_message_close(msg);
 		} else {
-			ctx->cb(ctx, ctx->cb_ud, tmp, msg->data, msg->sz);
+			ctx->cb(ctx, ctx->cb_ud, msg->session, tmp, msg->data, msg->sz);
 		}
 
 		free(msg->data);
 	}
 }
 
+// 丢弃消息队列
 static void
 _drop_queue(struct message_queue *q) {
 	// todo: send message back to message source
@@ -154,11 +187,11 @@ _drop_queue(struct message_queue *q) {
 */
 int
 skynet_context_message_dispatch(void) {
-	struct message_queue * q = skynet_globalmq_pop();
+	struct message_queue * q = skynet_globalmq_pop();	// 从全局消息队列中取出一个消息队列
 	if (q==NULL)
 		return 1;
 
-	uint32_t handle = skynet_mq_handle(q);
+	uint32_t handle = skynet_mq_handle(q);				// 获得消息队列挂钩的服务 id
 
 	struct skynet_context * ctx = skynet_handle_grab(handle);
 	if (ctx == NULL) {	// 服务已销毁则丢弃消息到黑洞
@@ -171,7 +204,7 @@ skynet_context_message_dispatch(void) {
 	struct skynet_message msg;
 	if (skynet_mq_pop(q,&msg)) {
 		// empty queue
-		__sync_lock_release(&ctx->in_global_queue);
+		__sync_lock_release(&ctx->in_global_queue);		// 将 ctx->in_global_queue 置 0
 		skynet_context_release(ctx);
 		return 0;
 	}
@@ -188,21 +221,18 @@ skynet_context_message_dispatch(void) {
 
 	skynet_context_release(ctx);
 
-	skynet_globalmq_push(q);
+	skynet_globalmq_push(q);		// 塞回全局消息队列，这样的 push 和 pop 保证了公平性
 
 	return 0;
 }
 
 const char * 
-skynet_command(struct skynet_context * context, const char * cmd , const char * parm) {
+skynet_command(struct skynet_context * context, const char * cmd , int session, const char * parm) {
 	if (strcmp(cmd,"TIMEOUT") == 0) {	// 添加一个定时器消息，自己给自己发消息
 		//time:session
 		char * session_ptr = NULL;
 		//strtol会将parm按照10指定的基数转换然后返回。遇到的第一个非法值会将地址赋值给第二个参数
 		int ti = strtol(parm, &session_ptr, 10);
-		char sep = session_ptr[0];
-		assert(sep == ':');
-		int session = strtol(session_ptr+1, NULL, 10);
 		skynet_timeout(context->handle, ti, session);
 		return NULL;
 	}
@@ -255,7 +285,10 @@ skynet_command(struct skynet_context * context, const char * cmd , const char * 
  addr: 如果以':'开头则后面跟的是 handle ，如果以'.'开头则后面跟的是 handle name
 */
 void 
-skynet_send(struct skynet_context * context, const char * addr , void * msg, size_t sz) {
+skynet_send(struct skynet_context * context, const char * addr , int session, void * msg, size_t sz) {
+	if (session < 0) {
+		session = _new_session(context);
+	}
 	uint32_t des = 0;
 	if (addr[0] == ':') {
 		des = strtol(addr+1, NULL, 16);
@@ -269,6 +302,7 @@ skynet_send(struct skynet_context * context, const char * addr , void * msg, siz
 	} else {
 		struct skynet_message smsg;
 		smsg.source = context->handle;
+		smsg.session = session;
 		smsg.data = msg;
 		smsg.sz = sz;
 		skynet_harbor_send(addr, 0, &smsg);
@@ -278,6 +312,7 @@ skynet_send(struct skynet_context * context, const char * addr , void * msg, siz
 	assert(des > 0);
 	struct skynet_message smsg;
 	smsg.source = context->handle;
+	smsg.session = session;
 	smsg.data = msg;
 	smsg.sz = sz;
 
@@ -310,14 +345,19 @@ skynet_callback(struct skynet_context * context, void *ud, skynet_cb cb) {
 	context->cb_ud = ud;
 }
 
+// 将消息放入服务对应的消息队列，并将消息队列加入全局消息队列
+// 返回 0 表示成功，返回 -1 表示 handle 对应的服务不存在
 int
 skynet_context_push(uint32_t handle, struct skynet_message *message) {
 	struct skynet_context * ctx = skynet_handle_grab(handle);
 	if (ctx == NULL) {
 		return -1;
 	}
+	if (message->session < 0) {
+		message->session = _new_session(ctx);
+	}
 	skynet_mq_push(ctx->queue, message);
-	if (__sync_lock_test_and_set(&ctx->in_global_queue,1) == 0) {
+	if (__sync_lock_test_and_set(&ctx->in_global_queue,1) == 0) {	// 将 ctx->in_global_queue 设为 1 并返回 ctx->in_global_queue 操作之前的值。
 		skynet_globalmq_push(ctx->queue);
 	}
 	skynet_context_release(ctx);

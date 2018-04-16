@@ -141,11 +141,13 @@ timer_execute(struct timer *T)
 		current=link_clear(&T->near[idx]);
 		
 		do {
+			// 定时到期，将消息推到消息队列
 			struct timer_event * event = (struct timer_event *)(current+1);
 			struct skynet_message message;
 			message.source = SKYNET_SYSTEM_TIMER;
+			message.session = event->session;
 			message.data = NULL;
-			message.sz = (size_t) event->session;
+			message.sz = 0;
 
 			skynet_context_push(event->handle, &message);
 			
@@ -228,8 +230,9 @@ skynet_timeout(uint32_t handle, int time, int session) {
 	if (time == 0) {
 		struct skynet_message message;
 		message.source = SKYNET_SYSTEM_TIMER;
+		message.session = session;
 		message.data = NULL;
-		message.sz = (size_t) session;
+		message.sz = 0;
 
 		if (skynet_context_push(handle, &message)) {
 			return;
