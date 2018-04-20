@@ -7,3 +7,4 @@
 4. make
 5. sudo make install
 6. 到 skynet 的源代码目录运行 make
+7. 拷贝的时候将 zeromq-2.2.0/src/libzmq.so.1 拷贝到 /usr/lib
