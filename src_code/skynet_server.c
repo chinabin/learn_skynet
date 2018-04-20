@@ -246,6 +246,7 @@ skynet_command(struct skynet_context * context, const char * cmd , int session, 
 		// 使用方法例如： skynet.command("TIMEOUT", 0, "0") 
 		char * session_ptr = NULL;
 		//strtol会将parm按照10指定的基数转换然后返回。遇到的第一个非法值会将地址赋值给第二个参数
+		int ti = strtol(parm, &session_ptr, 10);
 		session = skynet_timeout(context->handle, ti, session);
 		if (session < 0)
 			return NULL;
