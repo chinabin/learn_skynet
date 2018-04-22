@@ -182,18 +182,11 @@ skynet_harbor_send(const char *name, uint32_t destination, struct skynet_message
 		assert(destination!=0);
 		int remote_id = destination >> HANDLE_REMOTE_SHIFT;
 		assert(remote_id > 0 && remote_id <= REMOTE_MAX);
-		--remote_id;
-		struct remote * r = &Z->remote[remote_id];
 		struct skynet_remote_message message;
 		message.destination = destination;
 		message.message = *msg;
-		if (r->socket) {	// 已经与对应的 skynet 节点建立了连接
-			skynet_remotemq_push(Z->queue, &message);
-			send_notice();
-		} else {			// 还没有与对应的 skynet 节点建立连接
-			// QUESTION : 如何确定消息队列就已经建立了？
-			skynet_remotemq_push(r->queue, &message);
-		}
+		skynet_remotemq_push(Z->queue, &message);
+		send_notice();
 	} else {				// 明确发送给某个服务名对应的服务。
 		_lock();		// 加锁，免得查找的时候有插入
 		struct keyvalue * node = _hash_search(Z->map, name);
@@ -346,6 +339,41 @@ _report_zmq_error(int rc) {
 	}
 }
 
+static int
+_isdecimal(int c) {
+	return c>='0' && c<='9';
+}
+
+/*
+ 如果 buf 形式为 %d=%s 则 *np = %d ，返回等号的位置
+ 如果 buf 形式为 %s=%d 则返回 %s 的长度
+ 如果 buf 形式为 %s 则返回 -1
+*/
+// Name-updating protocols:
+//
+// 1) harbor_id=harbor_address
+// 2) context_name=context_handle
+static int
+_split_name(uint8_t *buf, int len, int *np) {
+	uint8_t *sep;
+	if (len > 0 && _isdecimal(buf[0])) {
+		int i=0;
+		int n=0;
+		do {
+			n = n*10 + (buf[i]-'0');
+		} while(++i<len && _isdecimal(buf[i]));
+		if (i < len && buf[i] == '=') {
+			buf[i] = '\0';
+			*np = n;
+			return i;
+		}
+	} else if ((sep = memchr(buf, '=', len)) != NULL) {
+		*sep = '\0';
+		return (int)(sep-buf);
+	}
+	return -1;
+}
+
 /*
  接收来自另外的 master 的广播消息：
  1. harbor id 和地址更新
@@ -359,17 +387,11 @@ _name_update() {
 	int rc = zmq_recv(Z->zmq_local,&content,0);
 	_report_zmq_error(rc);
 	int sz = zmq_msg_size(&content);
-	int i;
-	int n = 0;
 	uint8_t * buffer = zmq_msg_data(&content);
-	for (i=0;i<sz;i++) {
-		if (buffer[i] == '=') {
-			buffer[i] = '\0';
-			break;
-		}
-		n = n * 10 + (buffer[i] - '0');
-	}
-	if (i==sz) {
+
+	int n = 0;
+	int i = _split_name(buffer, sz, &n);
+	if (i == -1) {
 		char tmp[sz+1];
 		memcpy(tmp,buffer,sz);
 		tmp[sz] = '\0';
@@ -481,6 +503,7 @@ remote_socket_send(void * socket, struct skynet_remote_message *msg) {
 	struct remote_header rh;
 	rh.source = msg->message.source;
 	rh.destination = msg->destination;
+	rh.session = msg->message.session;
 	zmq_msg_t part;
 	zmq_msg_init_size(&part,sizeof(struct remote_header));
 	uint8_t * buffer = zmq_msg_data(&part);
@@ -527,6 +550,7 @@ _remote_recv() {
 	_report_zmq_error(rc);
 
 	struct skynet_message msg;
+	msg.session = (int)rh.session;
 	msg.source = rh.source;
 	msg.data = data;
 	msg.sz = zmq_msg_size(data);
@@ -584,7 +608,7 @@ _goback:
 	__sync_lock_release(&Z->notice_event);
 	// double check
 	if (!skynet_remotemq_pop(Z->queue,&msg)) {
-		printf("goback %x\n",msg.destination);
+		__sync_lock_test_and_set(&Z->notice_event, 1);
 		goto _goback;
 	}
 }

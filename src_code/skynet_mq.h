@@ -6,7 +6,7 @@
 
 struct skynet_message {
 	uint32_t source;			// 源的 handle
-	int session;
+	int session;				// 约定的标识
 	void * data;
 	size_t sz;
 };

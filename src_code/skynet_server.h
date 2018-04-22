@@ -23,6 +23,7 @@ uint32_t skynet_context_handle(struct skynet_context *);
 void skynet_context_init(struct skynet_context *, uint32_t handle);
 // 将消息放入服务对应的消息队列，并将消息队列加入全局消息队列
 int skynet_context_push(uint32_t handle, struct skynet_message *message);
+int skynet_context_newsession(struct skynet_context *);
 /*
  从全局消息队列中取出消息分发，返回 1 表示阻塞，当前无消息
  这个时候的消息队列比较简单，所有消息都是放进全局消息队列中，服务的私有消息队列只是

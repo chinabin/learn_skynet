@@ -52,19 +52,20 @@ skynet_handle_register(struct skynet_context *ctx) {
 	for (;;) {
 		int i;
 		for (i=0;i<s->slot_size;i++) {
-			int hash = (i+s->handle_index) & (s->slot_size-1);
+			uint32_t handle = (i+s->handle_index) & HANDLE_MASK;
+			int hash = handle & (s->slot_size-1);
 			if (s->slot[hash] == NULL) {
 				s->slot[hash] = ctx;
-				uint32_t handle = s->handle_index + i;
-				skynet_context_init(ctx, handle);	// 设置 ctx 的 handle
+				s->handle_index = handle + 1;
 
 				rwlock_wunlock(&s->lock);
 
-				s->handle_index = handle + 1;
-
-				return (handle & HANDLE_MASK) | s->harbor;
+				handle |= s->harbor;
+				skynet_context_init(ctx, handle);
+				return handle;
 			}
 		}
+		assert((s->slot_size*2 - 1) <= HANDLE_MASK);
 		//空间不够，分配空间并迁移数据
 		struct skynet_context ** new_slot = malloc(s->slot_size * 2 * sizeof(struct skynet_context *));
 		memset(new_slot, 0, s->slot_size * 2 * sizeof(struct skynet_context *));
@@ -93,18 +94,17 @@ skynet_handle_retire(uint32_t handle) {
 		s->slot[hash] = NULL;
 
 		int i;
-		int j=0;
-		for (i=0;i<s->name_count;i++,j++) {
+		int j=0, n=s->name_count;
+		for (i=0; i<n; ++i) {
 			if (s->name[i].handle == handle) {
 				free(s->name[i].name);
-				++j;
-				--s->name_count;
-			} else {	// 别名位置前移
-				if (i!=j) {
-					s->name[i] = s->name[j];
-				}
+				continue;
+			} else if (i!=j) {
+				s->name[j] = s->name[i];
 			}
+			++j;
 		}
+		s->name_count = j;
 	}
 
 	rwlock_wunlock(&s->lock);

@@ -5,6 +5,7 @@
 对第三方提供的接口，让第三方可以编写自己的服务
 */
 #include <stddef.h>
+#include <stdint.h>
 
 struct skynet_context;
 
@@ -15,14 +16,14 @@ const char * skynet_command(struct skynet_context * context, const char * cmd , 
  服务 context->handle 给服务 addr 发消息
  addr: 如果以':'开头则后面跟的是 handle ，如果以'.'开头则后面跟的是 handle name
 */
-void skynet_send(struct skynet_context * context, const char * addr , int session, void * msg, size_t sz);
+int skynet_send(struct skynet_context * context, const char * addr , int session, void * msg, size_t sz);
 
 /*
  context 是服务指针
  ud 是 skynet_callback 设置的第二个参数
  addr 是源服务地址
  msg 是消息数据
- sz 是数据大小或者一个约定号
+ sz 是一个约定号
 */
 typedef void (*skynet_cb)(struct skynet_context * context, void *ud, int session, const char * addr , const void * msg, size_t sz);
 // 设置 ctx 的 回调函数接口以及传入回调函数的第二个参数
