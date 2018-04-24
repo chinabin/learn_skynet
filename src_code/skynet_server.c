@@ -243,7 +243,7 @@ skynet_context_message_dispatch(void) {
  session : 约定的 session
 */
 const char * 
-skynet_command(struct skynet_context * context, const char * cmd , int session, const char * parm) {
+skynet_command(struct skynet_context * context, const char * cmd , const char * parm) {
 	if (strcmp(cmd,"TIMEOUT") == 0) {	// 添加一个定时器消息，自己给自己发消息
 		//time:session
 		// 上面的 time:session 是作者旧的注释，添加 session 之后就变成错误的注释了
@@ -252,9 +252,10 @@ skynet_command(struct skynet_context * context, const char * cmd , int session, 
 		char * session_ptr = NULL;
 		//strtol会将parm按照10指定的基数转换然后返回。遇到的第一个非法值会将地址赋值给第二个参数
 		int ti = strtol(parm, &session_ptr, 10);
-		session = skynet_timeout(context->handle, ti, session);
+		int session = skynet_context_newsession(context);
 		if (session < 0)
 			return NULL;
+		skynet_timeout(context->handle, ti, session);
 		sprintf(context->result, "%d", session);
 		return context->result;
 	}
@@ -323,8 +324,10 @@ skynet_command(struct skynet_context * context, const char * cmd , int session, 
 */
 int 
 skynet_send(struct skynet_context * context, const char * addr , int session, void * msg, size_t sz) {
+	int session_id = session;
 	if (session < 0) {
 		session = skynet_context_newsession(context);
+		session_id = - session;
 	}
 	uint32_t des = 0;
 	if (addr[0] == ':') {
@@ -339,7 +342,7 @@ skynet_send(struct skynet_context * context, const char * addr , int session, vo
 	} else {
 		struct skynet_message smsg;
 		smsg.source = context->handle;
-		smsg.session = session;
+		smsg.session = session_id;
 		smsg.data = msg;
 		smsg.sz = sz;
 		skynet_harbor_send(addr, 0, &smsg);
@@ -349,7 +352,7 @@ skynet_send(struct skynet_context * context, const char * addr , int session, vo
 	assert(des > 0);
 	struct skynet_message smsg;
 	smsg.source = context->handle;
-	smsg.session = session;
+	smsg.session = session_id;
 	smsg.data = msg;
 	smsg.sz = sz;
 
@@ -391,7 +394,6 @@ skynet_context_push(uint32_t handle, struct skynet_message *message) {
 	if (ctx == NULL) {
 		return -1;
 	}
-	assert(message->session >= 0);
 	skynet_mq_push(ctx->queue, message);
 	if (__sync_lock_test_and_set(&ctx->in_global_queue,1) == 0) {	// 将 ctx->in_global_queue 设为 1 并返回 ctx->in_global_queue 操作之前的值。
 		skynet_globalmq_push(ctx->queue);

@@ -11,7 +11,7 @@ struct skynet_context;
 
 // 从 context->handle 中给 logger 发消息
 void skynet_error(struct skynet_context * context, const char *msg, ...);
-const char * skynet_command(struct skynet_context * context, const char * cmd , int session, const char * parm);
+const char * skynet_command(struct skynet_context * context, const char * cmd , const char * parm);
 /*
  服务 context->handle 给服务 addr 发消息
  addr: 如果以':'开头则后面跟的是 handle ，如果以'.'开头则后面跟的是 handle name
