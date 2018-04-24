@@ -15,8 +15,11 @@ gate.so : gate/mread.c gate/ringbuffer.c gate/map.c gate/main.c
 skynet.so : lua-skynet.c
 	gcc -Wall -g -fPIC --shared $^ -o $@
 
+client.so : service_client.c
+	gcc -Wall -g -fPIC --shared $^ -o $@
+
 client : client.c
-	gcc -Wall -g $^ -o $@
+	gcc -Wall -g $^ -o $@ -lpthread
 
 skynet-master : master/master.c
 	gcc -g -Wall -o $@ $^ -lzmq

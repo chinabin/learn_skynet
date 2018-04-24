@@ -167,17 +167,20 @@ _dispatch_message(struct skynet_context *ctx, struct skynet_message *msg) {
 }
 
 // 丢弃消息队列
-static void
+static int
 _drop_queue(struct message_queue *q) {
 	// todo: send message back to message source
 	struct skynet_message msg;
+	int s = 0;
 	while(!skynet_mq_pop(q, &msg)) {
+		++s;
 		if (skynet_harbor_message_isremote(msg.source)) {
 			skynet_harbor_message_close(&msg);
 		}
 		free(msg.data);
 	}
 	skynet_mq_release(q);
+	return s;
 }
 
 /*
@@ -195,8 +198,10 @@ skynet_context_message_dispatch(void) {
 
 	struct skynet_context * ctx = skynet_handle_grab(handle);
 	if (ctx == NULL) {	// 服务已销毁则丢弃消息到黑洞
-		skynet_error(NULL, "Drop message queue %x ", handle);
-		_drop_queue(q);
+		int s = _drop_queue(q);
+		if (s>0) {
+			skynet_error(NULL, "Drop message queue %x (%d messages)", handle,s);
+		}
 		return 0;
 	}
 	assert(ctx->in_global_queue);
@@ -274,6 +279,21 @@ skynet_command(struct skynet_context * context, const char * cmd , int session, 
 
 	if (strcmp(cmd,"EXIT") == 0) {	// 服务销毁
 		skynet_handle_retire(context->handle);
+		return NULL;
+	}
+
+	if (strcmp(cmd,"KILL") == 0) {
+		uint32_t handle = 0;
+		if (parm[0] == ':') {
+			handle = strtoul(parm+1, NULL, 16);
+		} else if (parm[0] == '.') {
+			handle = skynet_handle_findname(parm+1);
+		} else {
+			// todo : kill global service
+		}
+		if (handle) {
+			skynet_handle_retire(handle);
+		}
 		return NULL;
 	}
 

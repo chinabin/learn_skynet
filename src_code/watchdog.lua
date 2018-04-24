@@ -1,6 +1,7 @@
 local skynet = require "skynet"
 
 local command = {}
+local agent_all = {}
 
 --[[
 	%d 	表示数字
@@ -13,19 +14,30 @@ local command = {}
 function command:open(parm)
 	local fd,addr = string.match(parm,"(%d+) ([^%s]+)")
 	fd = tonumber(fd)
-	local agent = skynet.launch("snlua","agent.lua",self)
-	local agent = skynet.command("LAUNCH","snlua agent.lua ".. self)	-- 这里启动一个 snlua 服务，返回服务地址。并且因为 open 命令处理的是用户连接，所以经常在网上看到的说每个用户接入会启动一个 agent 。
+	skynet.send("LOG", 0, string.format("%d %d %s",self,fd,addr))
+	local client = skynet.launch("client",fd)
+	print("client",client)
+	-- 这里启动一个 snlua 服务，返回服务地址。并且因为 open 命令处理的是用户连接，所以经常在网上看到的说每个用户接入会启动一个 agent 。
+	local agent = skynet.launch("snlua","agent.lua",client)
 	if agent then
+		agent_all[self] = agent
 		skynet.send("gate",0, "forward ".. self .. " " .. agent)
 	end
 end
 
 function command:close()
 	skynet.send("LOG",0, string.format("close %d",self))
+	skynet.send(agent_all[self],1,"CLOSE")
+	agent_all[self] = nil
 end
 
 function command:data(data)
-	skynet.send("LOG",0, string.format("data %d size=%d",self,#data))
+	local agent = agent_all[self]
+	if agent then
+		skynet.send(agent,0,data)
+	else
+		skynet.send("LOG",0,string.format("data %d size=%d",self,#data))
+	end
 end
 
 -- 给 watchdog 发消息的回调函数

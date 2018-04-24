@@ -1,8 +1,17 @@
 local skynet = require "skynet"
+-- 传入 agent.lua 文件的参数
+local client = ...
 
--- 输出传入 agent.lua 文件的参数
-print("agent",...)
-
-skynet.dispatch(function(msg , addr)
-	print("[agent]",addr,msg)
+skynet.dispatch(function(msg,session)
+	if session == 0 then
+		print("client command",msg)
+		local result = skynet.call("SIMPLEDB",msg)
+		skynet.send(client,0,result)
+	else
+		print("server command",msg)
+		if msg == "CLOSE" then
+			skynet.kill(client)
+			skynet.exit()
+		end
+	end
 end)
