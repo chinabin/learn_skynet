@@ -1,0 +1,22 @@
+1. 卸载之前的lua：
+	如果有源代码：
+		a. 进入源代码目录
+		b. sudo make uninstall
+	如果没有源代码
+		a. 输入 whick lua 找到路径
+		b. 删除执行文件
+		
+2. 从 http://www.lua.org/ftp/ 下载源代码 lua-5.2.0.tar.gz
+3. 解压tar zxf lua-5.2.0.tar.gz
+4. cd lua-5.2.0
+5. vim src/Makefile
+6. 将
+	CFLAGS= -O2 -Wall -DLUA_COMPAT_ALL $(SYSCFLAGS) $(MYCFLAGS)
+   改为
+	CFLAGS= -O2 -Wall -DLUA_COMPAT_ALL $(SYSCFLAGS) -fPIC $(MYCFLAGS)
+7. 如果报错说 cannot find -lncurses ，运行 sudo apt-get install libncurses5-dev
+8. make linux test
+9. make linux
+10. sudo make install
+11. 如果这时候输入 lua 无法运行，输入 which lua 可以看到，这是因为没有建立软链接
+	ln -s lua_dir /usr/bin/lua
