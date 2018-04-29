@@ -46,7 +46,7 @@ struct hashmap {
  */
 struct remote_message_header {
 	uint32_t source;
-	uint32_t destination;
+	uint32_t destination;	// (destination & HANDLE_MASK) | ((uint32_t)type << HANDLE_REMOTE_SHIFT)
 	uint32_t session;
 };
 
@@ -61,7 +61,7 @@ struct harbor {
 
 // hash table
 /*
- 往消息队列中增加一条消息
+ 往消息队列中增加一条消息，消息由 buffer + remote_message_header 组成
  queue: 目的消息队列
  buffer: 消息的内容
  sz: buffer 的大小
@@ -173,7 +173,7 @@ _hash_erase(struct hashmap * hash, char name[GLOBALNAME_LENGTH) {
 */
 
 /*
- 新建一个服务别名，但是对应的服务 id 还是0
+ 新建一个服务别名，但是对应的服务 id 还是 0 ，并且消息队列为空。
 */
 static struct keyvalue *
 _hash_insert(struct hashmap * hash, const char name[GLOBALNAME_LENGTH]) {
@@ -404,6 +404,10 @@ _update_remote_address(struct skynet_context * context, struct harbor *h, int ha
 	}
 }
 
+/*
+ 将消息队列 queue 中的消息发给 handle 对应的服务。
+ name 和 handle 是 handle 对应的服务的别名和 handle id
+*/
 static void
 _dispatch_queue(struct harbor *h, struct skynet_context * context, struct msg_queue * queue, uint32_t handle,  const char name[GLOBALNAME_LENGTH] ) {
 	int harbor_id = handle >> HANDLE_REMOTE_SHIFT;
@@ -419,7 +423,7 @@ _dispatch_queue(struct harbor *h, struct skynet_context * context, struct msg_qu
 	struct msg * m = _pop_queue(queue);
 	while (m) {
 		struct remote_message_header * cookie = (struct remote_message_header *)(m->buffer + m->size - sizeof(*cookie));
-		cookie->destination |= (handle & HANDLE_MASK);
+		cookie->destination |= (handle & HANDLE_MASK);	// (destination & HANDLE_MASK) | ((uint32_t)type << HANDLE_REMOTE_SHIFT)
 		_header_to_message(cookie, (uint32_t *)cookie);
 		int err = _send_package(fd, m->buffer, m->size);
 		if (err) {
@@ -434,6 +438,9 @@ _dispatch_queue(struct harbor *h, struct skynet_context * context, struct msg_qu
 	}
 }
 
+/*
+ 更新服务名和 id ，并处理(如果之前有发往此服务的消息 _remote_send_name )堆积发往此服务的消息。
+*/
 static void
 _update_remote_name(struct harbor *h, struct skynet_context * context, const char name[GLOBALNAME_LENGTH], uint32_t handle) {
 	struct keyvalue * node = _hash_search(h->map, name);
@@ -448,6 +455,10 @@ _update_remote_name(struct harbor *h, struct skynet_context * context, const cha
 	}
 }
 
+/*
+ 给 master 服务发消息，内容是 handle + name
+ i: name 的实际大小
+*/
 static void
 _request_master(struct harbor *h, struct skynet_context * context, const char name[GLOBALNAME_LENGTH], size_t i, uint32_t handle) {
 	char buffer[4+i];
