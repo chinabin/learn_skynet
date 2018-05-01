@@ -106,6 +106,9 @@ skynet_context_newsession(struct skynet_context *ctx) {
 	return session;
 }
 
+/*
+ 递增 ctx 的引用计数
+*/
 void 
 skynet_context_grab(struct skynet_context *ctx) {
 	__sync_add_and_fetch(&ctx->ref,1);
@@ -118,6 +121,9 @@ _delete_context(struct skynet_context *ctx) {
 	free(ctx);
 }
 
+/*
+ 递减 ctx 的引用计数，如果为 0 则销毁 ctx 。
+*/
 struct skynet_context * 
 skynet_context_release(struct skynet_context *ctx) {
 	if (__sync_sub_and_fetch(&ctx->ref,1) == 0) {
@@ -544,11 +550,17 @@ skynet_sendname(struct skynet_context * context, const char * addr , int type, i
 	return skynet_send(context, source, des, type, session, data, sz);
 }
 
+/*
+ 获取 ctx 的handle id
+*/
 uint32_t 
 skynet_context_handle(struct skynet_context *ctx) {
 	return ctx->handle;
 }
 
+/*
+ 将 handle id 赋值给 ctx
+*/
 void 
 skynet_context_init(struct skynet_context *ctx, uint32_t handle) {
 	ctx->handle = handle;

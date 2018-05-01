@@ -18,6 +18,10 @@ struct modules {
 
 static struct modules * M = NULL;
 
+/*
+ 从默认的动态链接库目录找到并打开 name 所指定的so库，
+ 返回动态链接库句柄，失败返回NULL
+*/
 static void *
 _try_open(struct modules *m, const char * name) {
 	const char * path = m->path;
@@ -38,6 +42,11 @@ _try_open(struct modules *m, const char * name) {
 		exit(1);
 	}
 
+	/*
+	 RTLD_NOW: 在dlopen返回前，解析出每个未定义变量的地址，如果解析不出来，
+	 返回NULL，并抛出错误信息。
+	 RTLD_GLOBAL: 使得库中的解析的定义变量在随后的其它的链接库中变得可以使用。
+	*/
 	void * dl = dlopen(tmp, RTLD_NOW | RTLD_GLOBAL);
 
 	if (dl == NULL) {
@@ -47,6 +56,11 @@ _try_open(struct modules *m, const char * name) {
 	return dl;
 }
 
+/*
+ 查询 name 对应的so库是否已经加载。
+ 如果已经加载则返回对应的 skynet_module 指针
+ 否则返回 NULL
+*/
 static struct skynet_module * 
 _query(const char * name) {
 	int i;
@@ -58,6 +72,10 @@ _query(const char * name) {
 	return NULL;
 }
 
+/*
+ 给三个约定的函数指针赋值
+ 返回0表示成功
+*/
 static int
 _open_sym(struct skynet_module *mod) {
 	size_t name_size = strlen(mod->name);
@@ -73,6 +91,9 @@ _open_sym(struct skynet_module *mod) {
 	return mod->init == NULL;
 }
 
+/*
+ 将 name 对应的so库加载进 modules ，并返回 skynet_module 指针
+*/
 struct skynet_module * 
 skynet_module_query(const char * name) {
 	struct skynet_module * result = _query(name);
@@ -103,6 +124,9 @@ skynet_module_query(const char * name) {
 	return result;
 }
 
+/*
+ 将 skynet_module 插入到 modules
+*/
 void 
 skynet_module_insert(struct skynet_module *mod) {
 	while(__sync_lock_test_and_set(&M->lock,1)) {}
@@ -115,6 +139,10 @@ skynet_module_insert(struct skynet_module *mod) {
 	__sync_lock_release(&M->lock);
 }
 
+/*
+ 调用 create 接口，返回实例指针。
+ 后面会传入 init 函数和 release 函数。
+*/
 void * 
 skynet_module_instance_create(struct skynet_module *m) {
 	if (m->create) {
@@ -124,11 +152,19 @@ skynet_module_instance_create(struct skynet_module *m) {
 	}
 }
 
+/*
+ 调用 init 接口。
+ 1. init 接口实现中需要调用 skynet_callback 设置好回调接口，之后处理消息的时候需要调用
+ 2. 返回0表示成功
+*/
 int
 skynet_module_instance_init(struct skynet_module *m, void * inst, struct skynet_context *ctx, const char * parm) {
 	return m->init(inst, ctx, parm);
 }
 
+/*
+ 调用 release 接口。
+*/
 void 
 skynet_module_instance_release(struct skynet_module *m, void *inst) {
 	if (m->release) {
@@ -136,6 +172,9 @@ skynet_module_instance_release(struct skynet_module *m, void *inst) {
 	}
 }
 
+/*
+ 初始化 modules
+*/
 void 
 skynet_module_init(const char *path) {
 	struct modules *m = malloc(sizeof(*m));
