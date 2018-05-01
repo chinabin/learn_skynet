@@ -124,10 +124,16 @@ _report(struct skynet_context * ctx, const char * data, ...) {
 static void
 _forward(struct skynet_context * ctx,struct gate *g, int uid, void * data, size_t len) {
 	struct connection * agent = _id_to_agent(g,uid);
-	char * tmp = malloc(len + 32);
-	int n = snprintf(tmp,len+32,"%d data ",uid);
-	memcpy(tmp+n,data,len);
-	skynet_send(ctx, agent->agent ? agent->agent : WATCHDOG, 0, tmp, len + n);
+	if (agent->agent) {
+		char * tmp = malloc(len);
+		memcpy(tmp,data,len);
+		skynet_send(ctx, agent->agent, 0, tmp, len);
+	} else {
+		char * tmp = malloc(len + 32);
+		int n = snprintf(tmp,len+32,"%d data ",uid);
+		memcpy(tmp+n,data,len);
+		skynet_send(ctx, WATCHDOG, 0, tmp, len + n);
+	}
 }
 
 static int
@@ -178,7 +184,7 @@ _cb(struct skynet_context * ctx, void * ud, int session, const char * uid, const
 	struct mread_pool * m = g->pool;
 	int connection_id = mread_poll(m,100);	// timeout : 100ms
 	if (connection_id < 0) {
-		skynet_command(ctx, "TIMEOUT", 0, "1");
+		skynet_command(ctx, "TIMEOUT", "1");
 	} else {
 		int id = g->map[connection_id].uid;
 		if (id == 0) {
@@ -209,7 +215,7 @@ _cb(struct skynet_context * ctx, void * ud, int session, const char * uid, const
 		_forward(ctx, g, id, data, *plen);	// 将接收到的数据发往 watchdog 或者 agent 
 		mread_yield(m);
 _break:
-		skynet_command(ctx, "TIMEOUT",0,"0");
+		skynet_command(ctx, "TIMEOUT", "0");
 	}
 }
 
@@ -249,8 +255,8 @@ gate_init(struct gate *g , struct skynet_context * ctx, char * parm) {
 	}
 
 	skynet_callback(ctx,g,_cb);
-	skynet_command(ctx,"REG",0,"gate");
-	skynet_command(ctx,"TIMEOUT",0, "0");
+	skynet_command(ctx,"REG", "gate");
+	skynet_command(ctx,"TIMEOUT", "0");
 
 	return 0;
 }

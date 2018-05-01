@@ -147,7 +147,6 @@ skynet_handle_findname(const char * name) {
 		int c = strcmp(n->name, name);
 		if (c==0) {
 			handle = n->handle;
-			handle |= s->harbor;
 			break;
 		}
 		if (c<0) {
@@ -233,7 +232,7 @@ skynet_handle_init(int harbor) {
 	struct handle_storage * s = malloc(sizeof(*H));
 	s->slot_size = DEFAULT_SLOT_SIZE;
 	s->slot = malloc(s->slot_size * sizeof(struct skynet_context *));
-	memset(s->slot, 0, s->slot_size * sizeof(struct skynet_context *));		//写错了 handle_slot ，之后改成了skynet_context
+	memset(s->slot, 0, s->slot_size * sizeof(struct handle_slot *));
 
 	rwlock_init(&s->lock);
 	// reserve 0 for system
